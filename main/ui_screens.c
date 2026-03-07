@@ -27,7 +27,7 @@ static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
 
 // Commission widgets
-static lv_obj_t *commission_method_radios[4] = {};
+static lv_obj_t *commission_method_radios[5] = {};
 static lv_obj_t *commission_code_ta = NULL;
 static lv_obj_t *commission_disc_ta = NULL;
 static lv_obj_t *commission_disc_label = NULL;
@@ -35,7 +35,7 @@ static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
 static lv_obj_t *commission_start_btn = NULL;
-// 0=Setup PIN Code, 1=Discriminator+Passcode, 2=Manual Pairing Code, 3=QR Code
+// 0=Setup PIN Code, 1=Disc+Passcode, 2=Manual Code, 3=QR Code, 4=BLE+WiFi
 static int       commission_method = 0;
 
 // Detail widgets
@@ -136,7 +136,7 @@ static void btn_back_dashboard_cb(lv_event_t *e) {
 // ---- Commission screen callbacks ----
 static void update_commission_fields(void) {
     // Show/hide discriminator field based on method
-    bool show_disc = (commission_method == 1);
+    bool show_disc = (commission_method == 1 || commission_method == 4);
     if (show_disc) {
         lv_obj_clear_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
@@ -146,15 +146,21 @@ static void update_commission_fields(void) {
     }
 
     // Update code field label and placeholder based on method
-    static const char *labels[] = {"Setup PIN Code:", "Passcode:", "Manual Pairing Code:", "QR Code Payload:"};
-    static const char *placeholders[] = {"e.g. 20212020", "e.g. 20212020", "e.g. 34970112332", "e.g. MT:..."};
+    static const char *labels[] = {
+        "Setup PIN Code:", "Passcode:", "Manual Pairing Code:",
+        "QR Code Payload:", "Passcode:"
+    };
+    static const char *placeholders[] = {
+        "e.g. 20212020", "e.g. 20212020", "e.g. 34970112332",
+        "e.g. MT:...", "e.g. 20212020"
+    };
     lv_label_set_text(commission_code_label, labels[commission_method]);
     lv_textarea_set_placeholder_text(commission_code_ta, placeholders[commission_method]);
 }
 
 static void method_radio_cb(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (obj == commission_method_radios[i]) {
             commission_method = i;
             lv_obj_add_state(commission_method_radios[i], LV_STATE_CHECKED);
@@ -173,13 +179,14 @@ static void btn_start_commission_cb(lv_event_t *e) {
     if (!code_str || code_str[0] == '\0') {
         static const char *prompts[] = {
             "Enter setup PIN code!", "Enter passcode!",
-            "Enter manual pairing code!", "Enter QR code payload!"
+            "Enter manual pairing code!", "Enter QR code payload!",
+            "Enter passcode!"
         };
         lv_label_set_text(commission_status_label, prompts[commission_method]);
         return;
     }
 
-    if (commission_method == 1) {
+    if (commission_method == 1 || commission_method == 4) {
         const char *disc_str = lv_textarea_get_text(commission_disc_ta);
         if (!disc_str || disc_str[0] == '\0') {
             lv_label_set_text(commission_status_label, "Enter discriminator!");
@@ -219,6 +226,14 @@ static void btn_start_commission_cb(lv_event_t *e) {
     case 3: {
         // QR code payload
         err = matter_commission_code(s_pending_node_id, code_str);
+        break;
+    }
+    case 4: {
+        // BLE+WiFi: discriminator + passcode over BLE, WiFi creds auto-fetched
+        uint32_t pincode = (uint32_t)atol(code_str);
+        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+        uint16_t disc = (uint16_t)atoi(disc_str);
+        err = matter_commission_ble_wifi(s_pending_node_id, pincode, disc);
         break;
     }
     }
@@ -294,21 +309,72 @@ static void btn_back_detail_cb(lv_event_t *e) {
     switch_to_screen(scr_dashboard, grp_dashboard);
 }
 
+// ---- Embedded key icons ----
+extern const uint8_t icon_esc_png_start[] asm("_binary_esc_png_start");
+extern const uint8_t icon_esc_png_end[]   asm("_binary_esc_png_end");
+extern const uint8_t icon_f1_png_start[]  asm("_binary_f1_png_start");
+extern const uint8_t icon_f1_png_end[]    asm("_binary_f1_png_end");
+extern const uint8_t icon_f2_png_start[]  asm("_binary_f2_png_start");
+extern const uint8_t icon_f2_png_end[]    asm("_binary_f2_png_end");
+
+static lv_image_dsc_t img_dsc_esc;
+static lv_image_dsc_t img_dsc_f1;
+static lv_image_dsc_t img_dsc_f2;
+static bool icons_initialized = false;
+
+static void init_key_icons(void) {
+    if (icons_initialized) return;
+
+    img_dsc_esc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_esc.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_esc.header.w = 32;
+    img_dsc_esc.header.h = 32;
+    img_dsc_esc.data = icon_esc_png_start;
+    img_dsc_esc.data_size = icon_esc_png_end - icon_esc_png_start;
+
+    img_dsc_f1.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f1.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f1.header.w = 32;
+    img_dsc_f1.header.h = 32;
+    img_dsc_f1.data = icon_f1_png_start;
+    img_dsc_f1.data_size = icon_f1_png_end - icon_f1_png_start;
+
+    img_dsc_f2.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f2.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f2.header.w = 32;
+    img_dsc_f2.header.h = 32;
+    img_dsc_f2.data = icon_f2_png_start;
+    img_dsc_f2.data_size = icon_f2_png_end - icon_f2_png_start;
+
+    icons_initialized = true;
+}
+
 // ---- Key hint bar ----
-static lv_obj_t *create_key_hints(lv_obj_t *parent, const char *hints) {
+static void hint_add_icon(lv_obj_t *bar, const lv_image_dsc_t *icon) {
+    lv_obj_t *img = lv_image_create(bar);
+    lv_image_set_src(img, icon);
+    lv_image_set_inner_align(img, LV_IMAGE_ALIGN_CENTER);
+    lv_obj_set_size(img, 20, 20);
+    lv_image_set_scale(img, 160);
+}
+
+static void hint_add_text(lv_obj_t *bar, const char *text) {
+    lv_obj_t *lbl = lv_label_create(bar);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xAAAAAA), 0);
+}
+
+static lv_obj_t *create_key_hints_bar(lv_obj_t *parent) {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_set_size(bar, LV_PCT(100), 24);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(bar, 2, 0);
+    lv_obj_set_style_pad_gap(bar, 4, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl = lv_label_create(bar);
-    lv_label_set_text(lbl, hints);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0xAAAAAA), 0);
     return bar;
 }
 
@@ -373,8 +439,12 @@ static void create_dashboard_screen(void) {
     lv_label_set_text(dashboard_status_label, "Initializing...");
     lv_obj_set_style_text_color(dashboard_status_label, lv_color_hex(0x888888), 0);
 
-    create_key_hints(scr_dashboard,
-        "Enter: Toggle    F1 " LV_SYMBOL_CLOSE ": Details    F2 " LV_SYMBOL_WARNING ": Force Remove");
+    lv_obj_t *dash_hints = create_key_hints_bar(scr_dashboard);
+    hint_add_text(dash_hints, "Enter: Toggle");
+    hint_add_icon(dash_hints, &img_dsc_f1);
+    hint_add_text(dash_hints, "Details");
+    hint_add_icon(dash_hints, &img_dsc_f2);
+    hint_add_text(dash_hints, "Force Remove");
 }
 
 static void refresh_dashboard(void) {
@@ -460,9 +530,20 @@ static void create_commission_screen(void) {
     lv_obj_set_style_pad_gap(method_row2, 4, 0);
     lv_obj_clear_flag(method_row2, LV_OBJ_FLAG_SCROLLABLE);
 
-    static const char *method_labels[] = {"PIN Code", "Disc+Passcode", "Manual Code", "QR Code"};
-    lv_obj_t *method_rows[] = {method_row1, method_row1, method_row2, method_row2};
-    for (int i = 0; i < 4; i++) {
+    lv_obj_t *method_row3 = lv_obj_create(scr_commission);
+    lv_obj_set_size(method_row3, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(method_row3, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(method_row3, 2, 0);
+    lv_obj_set_style_pad_gap(method_row3, 4, 0);
+    lv_obj_clear_flag(method_row3, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const char *method_labels[] = {
+        "PIN Code", "Disc+Passcode", "Manual Code", "QR Code", "BLE+WiFi"
+    };
+    lv_obj_t *method_rows[] = {
+        method_row1, method_row1, method_row2, method_row2, method_row3
+    };
+    for (int i = 0; i < 5; i++) {
         commission_method_radios[i] = lv_button_create(method_rows[i]);
         lv_obj_add_flag(commission_method_radios[i], LV_OBJ_FLAG_CHECKABLE);
         lv_obj_t *lbl = lv_label_create(commission_method_radios[i]);
@@ -531,7 +612,11 @@ static void create_commission_screen(void) {
     lv_obj_set_width(commission_status_label, LV_PCT(100));
     lv_label_set_long_mode(commission_status_label, LV_LABEL_LONG_WRAP);
 
-    create_key_hints(scr_commission, "Tab: Next field    Enter: Confirm    Esc: Back");
+    lv_obj_t *comm_hints = create_key_hints_bar(scr_commission);
+    hint_add_text(comm_hints, "Tab: Next field");
+    hint_add_text(comm_hints, "Enter: Confirm");
+    hint_add_icon(comm_hints, &img_dsc_esc);
+    hint_add_text(comm_hints, "Back");
 }
 
 static void create_detail_screen(void) {
@@ -609,7 +694,11 @@ static void create_detail_screen(void) {
     lv_obj_add_event_cb(unpair_btn, btn_unpair_cb, LV_EVENT_CLICKED, NULL);
     lv_group_add_obj(grp_detail, unpair_btn);
 
-    create_key_hints(scr_detail, "Tab: Next    Enter: Confirm    Esc: Back");
+    lv_obj_t *detail_hints = create_key_hints_bar(scr_detail);
+    hint_add_text(detail_hints, "Tab: Next");
+    hint_add_text(detail_hints, "Enter: Confirm");
+    hint_add_icon(detail_hints, &img_dsc_esc);
+    hint_add_text(detail_hints, "Back");
 }
 
 static void show_detail_for_device(uint64_t node_id) {
@@ -634,6 +723,7 @@ static void show_detail_for_device(uint64_t node_id) {
 void ui_screens_init(void) {
     s_ui_event_queue = xQueueCreate(16, sizeof(matter_event_t));
 
+    init_key_icons();
     create_dashboard_screen();
     create_commission_screen();
     create_detail_screen();

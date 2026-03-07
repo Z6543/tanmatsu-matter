@@ -22,6 +22,10 @@ idf_component_register(
 		esp_wifi
 	INCLUDE_DIRS
 		"."
+	EMBED_FILES
+		"icons/esc.png"
+		"icons/f1.png"
+		"icons/f2.png"
 )
 
 idf_component_get_property(lvgl_lib lvgl COMPONENT_LIB)

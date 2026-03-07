@@ -70,6 +70,20 @@ esp_err_t matter_commission_code_wifi(uint64_t node_id, const char *payload) {
     return esp_matter::controller::pairing_code_wifi(node_id, ssid, pwd, payload);
 }
 
+esp_err_t matter_commission_ble_wifi(uint64_t node_id, uint32_t pincode, uint16_t discriminator) {
+    char ssid[33] = {};
+    char pwd[65] = {};
+    esp_err_t err = get_wifi_creds(ssid, sizeof(ssid), pwd, sizeof(pwd));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get WiFi credentials");
+        return err;
+    }
+    ESP_LOGI(TAG, "Pairing BLE+WiFi: node=0x%llx pin=%lu disc=%u ssid=%s",
+             (unsigned long long)node_id, (unsigned long)pincode, discriminator, ssid);
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    return esp_matter::controller::pairing_ble_wifi(node_id, pincode, discriminator, ssid, pwd);
+}
+
 esp_err_t matter_device_unpair(uint64_t node_id) {
     ESP_LOGI(TAG, "Unpair: node=0x%llx", (unsigned long long)node_id);
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
