@@ -17,6 +17,11 @@ static lv_obj_t *scr_dashboard = NULL;
 static lv_obj_t *scr_commission = NULL;
 static lv_obj_t *scr_detail = NULL;
 
+// Per-screen input groups
+static lv_group_t *grp_dashboard = NULL;
+static lv_group_t *grp_commission = NULL;
+static lv_group_t *grp_detail = NULL;
+
 // Dashboard widgets
 static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
@@ -49,6 +54,23 @@ static void create_commission_screen(void);
 static void create_detail_screen(void);
 static void refresh_dashboard(void);
 static void show_detail_for_device(uint64_t node_id);
+
+// ---- Group management ----
+static void activate_group(lv_group_t *grp) {
+    lv_indev_t *indev = NULL;
+    while ((indev = lv_indev_get_next(indev)) != NULL) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
+            lv_indev_set_group(indev, grp);
+        }
+    }
+    lv_group_set_default(grp);
+}
+
+static void switch_to_screen(lv_obj_t *scr, lv_group_t *grp) {
+    activate_group(grp);
+    lv_group_focus_obj(lv_group_get_focused(grp));
+    lv_screen_load(scr);
+}
 
 // ---- Event queue timer callback ----
 static void event_timer_cb(lv_timer_t *timer) {
@@ -97,13 +119,13 @@ static void btn_add_cb(lv_event_t *e) {
     if (commission_status_label) lv_label_set_text(commission_status_label, "");
     if (commission_code_ta) lv_textarea_set_text(commission_code_ta, "");
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
-    lv_screen_load(scr_commission);
+    switch_to_screen(scr_commission, grp_commission);
 }
 
 static void btn_back_dashboard_cb(lv_event_t *e) {
     (void)e;
     refresh_dashboard();
-    lv_screen_load(scr_dashboard);
+    switch_to_screen(scr_dashboard, grp_dashboard);
 }
 
 // ---- Commission screen callbacks ----
@@ -169,9 +191,15 @@ static void card_click_cb(lv_event_t *e) {
     }
 }
 
-static void card_long_press_cb(lv_event_t *e) {
+static void card_key_cb(lv_event_t *e) {
+    uint32_t key = lv_event_get_key(e);
     uint64_t node_id = (uint64_t)(uintptr_t)lv_event_get_user_data(e);
-    show_detail_for_device(node_id);
+    if (key == LV_KEY_HOME) {  // F1: details
+        show_detail_for_device(node_id);
+    } else if (key == LV_KEY_END) {  // F2: force remove
+        device_manager_remove(node_id);
+        refresh_dashboard();
+    }
 }
 
 // ---- Detail screen callbacks ----
@@ -208,17 +236,35 @@ static void btn_unpair_cb(lv_event_t *e) {
     matter_device_unpair(detail_node_id);
     device_manager_remove(detail_node_id);
     refresh_dashboard();
-    lv_screen_load(scr_dashboard);
+    switch_to_screen(scr_dashboard, grp_dashboard);
 }
 
 static void btn_back_detail_cb(lv_event_t *e) {
     (void)e;
     refresh_dashboard();
-    lv_screen_load(scr_dashboard);
+    switch_to_screen(scr_dashboard, grp_dashboard);
+}
+
+// ---- Key hint bar ----
+static lv_obj_t *create_key_hints(lv_obj_t *parent, const char *hints) {
+    lv_obj_t *bar = lv_obj_create(parent);
+    lv_obj_set_size(bar, LV_PCT(100), 24);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(bar, 2, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(bar, 0, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(bar);
+    lv_label_set_text(lbl, hints);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xAAAAAA), 0);
+    return bar;
 }
 
 // ---- Screen creation ----
-static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_t back_cb) {
+static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_t back_cb, lv_group_t *grp) {
     lv_obj_t *header = lv_obj_create(parent);
     lv_obj_set_size(header, LV_PCT(100), 40);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
@@ -229,8 +275,9 @@ static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_
     if (back_cb) {
         lv_obj_t *btn = lv_button_create(header);
         lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, LV_SYMBOL_LEFT);
+        lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
         lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
+        if (grp) lv_group_add_obj(grp, btn);
     }
 
     lv_obj_t *lbl = lv_label_create(header);
@@ -241,6 +288,8 @@ static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_
 }
 
 static void create_dashboard_screen(void) {
+    grp_dashboard = lv_group_create();
+
     scr_dashboard = lv_obj_create(NULL);
     lv_obj_set_flex_flow(scr_dashboard, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(scr_dashboard, 4, 0);
@@ -254,14 +303,13 @@ static void create_dashboard_screen(void) {
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "Matter Commissioner");
+    lv_label_set_text(title, LV_SYMBOL_HOME " Matter Commissioner");
 
     lv_obj_t *add_btn = lv_button_create(header);
     lv_obj_t *add_lbl = lv_label_create(add_btn);
-    lv_label_set_text(add_lbl, "+ Add");
+    lv_label_set_text(add_lbl, LV_SYMBOL_PLUS " Add");
     lv_obj_add_event_cb(add_btn, btn_add_cb, LV_EVENT_CLICKED, NULL);
-    lv_group_t *grp = lv_group_get_default();
-    if (grp) lv_group_add_obj(grp, add_btn);
+    lv_group_add_obj(grp_dashboard, add_btn);
 
     // Device cards container
     dashboard_container = lv_obj_create(scr_dashboard);
@@ -275,16 +323,25 @@ static void create_dashboard_screen(void) {
     dashboard_status_label = lv_label_create(scr_dashboard);
     lv_label_set_text(dashboard_status_label, "Initializing...");
     lv_obj_set_style_text_color(dashboard_status_label, lv_color_hex(0x888888), 0);
+
+    create_key_hints(scr_dashboard,
+        "Enter: Toggle    F1 " LV_SYMBOL_CLOSE ": Details    F2 " LV_SYMBOL_WARNING ": Force Remove");
 }
 
 static void refresh_dashboard(void) {
     if (!dashboard_container) return;
     lv_obj_clean(dashboard_container);
 
+    // Remove all card objects from group (keep the Add button which is first)
+    while (lv_group_get_obj_count(grp_dashboard) > 1) {
+        lv_obj_t *last = lv_group_get_obj_by_index(grp_dashboard, lv_group_get_obj_count(grp_dashboard) - 1);
+        lv_group_remove_obj(last);
+    }
+
     int count = device_manager_count();
     if (count == 0) {
         lv_obj_t *lbl = lv_label_create(dashboard_container);
-        lv_label_set_text(lbl, "No devices.\nTap '+ Add' to commission.");
+        lv_label_set_text(lbl, "No devices.\nSelect '" LV_SYMBOL_PLUS " Add' to commission.");
         return;
     }
 
@@ -317,7 +374,7 @@ static void refresh_dashboard(void) {
 
         void *user_data = (void *)(uintptr_t)dev->node_id;
         lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_SHORT_CLICKED, user_data);
-        lv_obj_add_event_cb(card, card_long_press_cb, LV_EVENT_LONG_PRESSED, user_data);
+        lv_obj_add_event_cb(card, card_key_cb, LV_EVENT_KEY, user_data);
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
         // Focus style: bright border when focused via keyboard
@@ -325,19 +382,19 @@ static void refresh_dashboard(void) {
         lv_obj_set_style_outline_color(card, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED);
         lv_obj_set_style_outline_pad(card, 2, LV_STATE_FOCUSED);
 
-        // Add to default group for keyboard navigation
-        lv_group_t *grp = lv_group_get_default();
-        if (grp) lv_group_add_obj(grp, card);
+        lv_group_add_obj(grp_dashboard, card);
     }
 }
 
 static void create_commission_screen(void) {
+    grp_commission = lv_group_create();
+
     scr_commission = lv_obj_create(NULL);
     lv_obj_set_flex_flow(scr_commission, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(scr_commission, 4, 0);
     lv_obj_set_style_pad_gap(scr_commission, 4, 0);
 
-    create_header(scr_commission, "Add New Device", btn_back_dashboard_cb);
+    create_header(scr_commission, "Add New Device", btn_back_dashboard_cb, grp_commission);
 
     // Method selector
     lv_obj_t *method_row = lv_obj_create(scr_commission);
@@ -364,6 +421,7 @@ static void create_commission_screen(void) {
         lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_width(commission_method_radios[i], 2, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_color(commission_method_radios[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_group_add_obj(grp_commission, commission_method_radios[i]);
     }
     lv_obj_add_state(commission_method_radios[0], LV_STATE_CHECKED);
     commission_method = 0;
@@ -376,6 +434,7 @@ static void create_commission_screen(void) {
     lv_textarea_set_one_line(commission_code_ta, true);
     lv_textarea_set_placeholder_text(commission_code_ta, "e.g. 20212020 or MT:...");
     lv_obj_set_width(commission_code_ta, LV_PCT(100));
+    lv_group_add_obj(grp_commission, commission_code_ta);
 
     // Device name
     lv_obj_t *name_label = lv_label_create(scr_commission);
@@ -385,6 +444,7 @@ static void create_commission_screen(void) {
     lv_textarea_set_one_line(commission_name_ta, true);
     lv_textarea_set_placeholder_text(commission_name_ta, "My Light");
     lv_obj_set_width(commission_name_ta, LV_PCT(100));
+    lv_group_add_obj(grp_commission, commission_name_ta);
 
     // Start button
     commission_start_btn = lv_button_create(scr_commission);
@@ -393,21 +453,26 @@ static void create_commission_screen(void) {
     lv_label_set_text(start_lbl, "Start Commissioning");
     lv_obj_center(start_lbl);
     lv_obj_add_event_cb(commission_start_btn, btn_start_commission_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_commission, commission_start_btn);
 
     // Status label
     commission_status_label = lv_label_create(scr_commission);
     lv_label_set_text(commission_status_label, "");
     lv_obj_set_width(commission_status_label, LV_PCT(100));
     lv_label_set_long_mode(commission_status_label, LV_LABEL_LONG_WRAP);
+
+    create_key_hints(scr_commission, "Tab: Next field    Enter: Confirm    Esc: Back");
 }
 
 static void create_detail_screen(void) {
+    grp_detail = lv_group_create();
+
     scr_detail = lv_obj_create(NULL);
     lv_obj_set_flex_flow(scr_detail, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(scr_detail, 4, 0);
     lv_obj_set_style_pad_gap(scr_detail, 4, 0);
 
-    create_header(scr_detail, "", btn_back_detail_cb);
+    create_header(scr_detail, "", btn_back_detail_cb, grp_detail);
 
     detail_name_label = lv_label_create(scr_detail);
     lv_label_set_text(detail_name_label, "");
@@ -427,16 +492,19 @@ static void create_detail_screen(void) {
     lv_obj_t *on_lbl = lv_label_create(on_btn);
     lv_label_set_text(on_lbl, "ON");
     lv_obj_add_event_cb(on_btn, btn_on_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_detail, on_btn);
 
     lv_obj_t *off_btn = lv_button_create(btn_row);
     lv_obj_t *off_lbl = lv_label_create(off_btn);
     lv_label_set_text(off_lbl, "OFF");
     lv_obj_add_event_cb(off_btn, btn_off_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_detail, off_btn);
 
     lv_obj_t *toggle_btn = lv_button_create(btn_row);
     lv_obj_t *toggle_lbl = lv_label_create(toggle_btn);
     lv_label_set_text(toggle_lbl, "TOGGLE");
     lv_obj_add_event_cb(toggle_btn, btn_toggle_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_detail, toggle_btn);
 
     // Info label
     detail_info_label = lv_label_create(scr_detail);
@@ -453,11 +521,13 @@ static void create_detail_screen(void) {
     lv_textarea_set_one_line(detail_rename_ta, true);
     lv_textarea_set_placeholder_text(detail_rename_ta, "New name");
     lv_obj_set_flex_grow(detail_rename_ta, 1);
+    lv_group_add_obj(grp_detail, detail_rename_ta);
 
     lv_obj_t *save_btn = lv_button_create(rename_row);
     lv_obj_t *save_lbl = lv_label_create(save_btn);
     lv_label_set_text(save_lbl, "Save");
     lv_obj_add_event_cb(save_btn, btn_rename_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_detail, save_btn);
 
     // Unpair button
     lv_obj_t *unpair_btn = lv_button_create(scr_detail);
@@ -467,6 +537,9 @@ static void create_detail_screen(void) {
     lv_label_set_text(unpair_lbl, "Unpair Device");
     lv_obj_center(unpair_lbl);
     lv_obj_add_event_cb(unpair_btn, btn_unpair_cb, LV_EVENT_CLICKED, NULL);
+    lv_group_add_obj(grp_detail, unpair_btn);
+
+    create_key_hints(scr_detail, "Tab: Next    Enter: Confirm    Esc: Back");
 }
 
 static void show_detail_for_device(uint64_t node_id) {
@@ -484,7 +557,7 @@ static void show_detail_for_device(uint64_t node_id) {
 
     lv_textarea_set_text(detail_rename_ta, dev->name);
 
-    lv_screen_load(scr_detail);
+    switch_to_screen(scr_detail, grp_detail);
 }
 
 // ---- Public API ----
@@ -496,7 +569,7 @@ void ui_screens_init(void) {
     create_detail_screen();
 
     refresh_dashboard();
-    lv_screen_load(scr_dashboard);
+    switch_to_screen(scr_dashboard, grp_dashboard);
 
     s_event_timer = lv_timer_create(event_timer_cb, 100, NULL);
 }
@@ -518,5 +591,5 @@ void ui_update_device_state(uint64_t node_id, bool on_off) {
 
 void ui_show_dashboard(void) {
     refresh_dashboard();
-    lv_screen_load(scr_dashboard);
+    switch_to_screen(scr_dashboard, grp_dashboard);
 }

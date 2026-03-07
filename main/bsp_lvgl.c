@@ -351,6 +351,25 @@ static void read_keyboard(lv_indev_t* indev, lv_indev_data_t* data) {
                             data->key   = LV_KEY_BACKSPACE;
                             data->state = event.args_navigation.state;
                             break;
+                        case BSP_INPUT_NAVIGATION_KEY_F1:
+                            data->key   = LV_KEY_HOME;  // F1 shortcut
+                            data->state = event.args_navigation.state;
+                            break;
+                        case BSP_INPUT_NAVIGATION_KEY_F2:
+                            data->key   = LV_KEY_END;   // F2 shortcut
+                            data->state = event.args_navigation.state;
+                            break;
+                        case BSP_INPUT_NAVIGATION_KEY_SPACE_L:
+                        case BSP_INPUT_NAVIGATION_KEY_SPACE_M:
+                        case BSP_INPUT_NAVIGATION_KEY_SPACE_R:
+                        case BSP_INPUT_NAVIGATION_KEY_F3:
+                        case BSP_INPUT_NAVIGATION_KEY_F4:
+                        case BSP_INPUT_NAVIGATION_KEY_F5:
+                        case BSP_INPUT_NAVIGATION_KEY_F6:
+                        case BSP_INPUT_NAVIGATION_KEY_VOLUME_UP:
+                        case BSP_INPUT_NAVIGATION_KEY_VOLUME_DOWN:
+                        case BSP_INPUT_NAVIGATION_KEY_SUPER:
+                            break;  // ignored, no warning
                         default:
                             ESP_LOGW(TAG, "Unhandled navigation event");
                             break;
