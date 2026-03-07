@@ -515,36 +515,19 @@ static void create_commission_screen(void) {
 
     create_header(scr_commission, "Add New Device", btn_back_dashboard_cb, grp_commission);
 
-    // Method selector - two rows for 4 methods
-    lv_obj_t *method_row1 = lv_obj_create(scr_commission);
-    lv_obj_set_size(method_row1, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(method_row1, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(method_row1, 2, 0);
-    lv_obj_set_style_pad_gap(method_row1, 4, 0);
-    lv_obj_clear_flag(method_row1, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *method_row2 = lv_obj_create(scr_commission);
-    lv_obj_set_size(method_row2, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(method_row2, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(method_row2, 2, 0);
-    lv_obj_set_style_pad_gap(method_row2, 4, 0);
-    lv_obj_clear_flag(method_row2, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *method_row3 = lv_obj_create(scr_commission);
-    lv_obj_set_size(method_row3, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(method_row3, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(method_row3, 2, 0);
-    lv_obj_set_style_pad_gap(method_row3, 4, 0);
-    lv_obj_clear_flag(method_row3, LV_OBJ_FLAG_SCROLLABLE);
+    // Method selector - single row for all 5 methods
+    lv_obj_t *method_row = lv_obj_create(scr_commission);
+    lv_obj_set_size(method_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(method_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(method_row, 2, 0);
+    lv_obj_set_style_pad_gap(method_row, 4, 0);
+    lv_obj_clear_flag(method_row, LV_OBJ_FLAG_SCROLLABLE);
 
     static const char *method_labels[] = {
-        "PIN Code", "Disc+Passcode", "Manual Code", "QR Code", "BLE+WiFi"
-    };
-    lv_obj_t *method_rows[] = {
-        method_row1, method_row1, method_row2, method_row2, method_row3
+        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi"
     };
     for (int i = 0; i < 5; i++) {
-        commission_method_radios[i] = lv_button_create(method_rows[i]);
+        commission_method_radios[i] = lv_button_create(method_row);
         lv_obj_add_flag(commission_method_radios[i], LV_OBJ_FLAG_CHECKABLE);
         lv_obj_t *lbl = lv_label_create(commission_method_radios[i]);
         lv_label_set_text(lbl, method_labels[i]);
