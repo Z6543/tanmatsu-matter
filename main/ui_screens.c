@@ -27,12 +27,16 @@ static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
 
 // Commission widgets
-static lv_obj_t *commission_method_radios[2] = {};
+static lv_obj_t *commission_method_radios[4] = {};
 static lv_obj_t *commission_code_ta = NULL;
+static lv_obj_t *commission_disc_ta = NULL;
+static lv_obj_t *commission_disc_label = NULL;
+static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
 static lv_obj_t *commission_start_btn = NULL;
-static int       commission_method = 0;  // 0=setup PIN code, 1=QR code
+// 0=Setup PIN Code, 1=Discriminator+Passcode, 2=Manual Pairing Code, 3=QR Code
+static int       commission_method = 0;
 
 // Detail widgets
 static lv_obj_t *detail_name_label = NULL;
@@ -118,6 +122,7 @@ static void btn_add_cb(lv_event_t *e) {
     (void)e;
     if (commission_status_label) lv_label_set_text(commission_status_label, "");
     if (commission_code_ta) lv_textarea_set_text(commission_code_ta, "");
+    if (commission_disc_ta) lv_textarea_set_text(commission_disc_ta, "");
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
 }
@@ -129,9 +134,27 @@ static void btn_back_dashboard_cb(lv_event_t *e) {
 }
 
 // ---- Commission screen callbacks ----
+static void update_commission_fields(void) {
+    // Show/hide discriminator field based on method
+    bool show_disc = (commission_method == 1);
+    if (show_disc) {
+        lv_obj_clear_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Update code field label and placeholder based on method
+    static const char *labels[] = {"Setup PIN Code:", "Passcode:", "Manual Pairing Code:", "QR Code Payload:"};
+    static const char *placeholders[] = {"e.g. 20212020", "e.g. 20212020", "e.g. 34970112332", "e.g. MT:..."};
+    lv_label_set_text(commission_code_label, labels[commission_method]);
+    lv_textarea_set_placeholder_text(commission_code_ta, placeholders[commission_method]);
+}
+
 static void method_radio_cb(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         if (obj == commission_method_radios[i]) {
             commission_method = i;
             lv_obj_add_state(commission_method_radios[i], LV_STATE_CHECKED);
@@ -139,6 +162,7 @@ static void method_radio_cb(lv_event_t *e) {
             lv_obj_clear_state(commission_method_radios[i], LV_STATE_CHECKED);
         }
     }
+    update_commission_fields();
 }
 
 static void btn_start_commission_cb(lv_event_t *e) {
@@ -147,8 +171,20 @@ static void btn_start_commission_cb(lv_event_t *e) {
     const char *name_str = lv_textarea_get_text(commission_name_ta);
 
     if (!code_str || code_str[0] == '\0') {
-        lv_label_set_text(commission_status_label, commission_method == 0 ? "Enter setup PIN code!" : "Enter QR code!");
+        static const char *prompts[] = {
+            "Enter setup PIN code!", "Enter passcode!",
+            "Enter manual pairing code!", "Enter QR code payload!"
+        };
+        lv_label_set_text(commission_status_label, prompts[commission_method]);
         return;
+    }
+
+    if (commission_method == 1) {
+        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+        if (!disc_str || disc_str[0] == '\0') {
+            lv_label_set_text(commission_status_label, "Enter discriminator!");
+            return;
+        }
     }
 
     strncpy(s_pending_name, name_str, MATTER_DEVICE_NAME_LEN - 1);
@@ -162,12 +198,25 @@ static void btn_start_commission_cb(lv_event_t *e) {
 
     switch (commission_method) {
     case 0: {
-        // Setup PIN code, on-network
+        // Setup PIN code, on-network (no discriminator)
         uint32_t pincode = (uint32_t)atol(code_str);
         err = matter_commission_on_network(s_pending_node_id, pincode);
         break;
     }
     case 1: {
+        // Discriminator + Passcode
+        uint32_t pincode = (uint32_t)atol(code_str);
+        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+        uint16_t disc = (uint16_t)atoi(disc_str);
+        err = matter_commission_on_network_disc(s_pending_node_id, pincode, disc);
+        break;
+    }
+    case 2: {
+        // Manual pairing code
+        err = matter_commission_code(s_pending_node_id, code_str);
+        break;
+    }
+    case 3: {
         // QR code payload
         err = matter_commission_code(s_pending_node_id, code_str);
         break;
@@ -396,16 +445,25 @@ static void create_commission_screen(void) {
 
     create_header(scr_commission, "Add New Device", btn_back_dashboard_cb, grp_commission);
 
-    // Method selector
-    lv_obj_t *method_row = lv_obj_create(scr_commission);
-    lv_obj_set_size(method_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(method_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_all(method_row, 2, 0);
-    lv_obj_clear_flag(method_row, LV_OBJ_FLAG_SCROLLABLE);
+    // Method selector - two rows for 4 methods
+    lv_obj_t *method_row1 = lv_obj_create(scr_commission);
+    lv_obj_set_size(method_row1, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(method_row1, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(method_row1, 2, 0);
+    lv_obj_set_style_pad_gap(method_row1, 4, 0);
+    lv_obj_clear_flag(method_row1, LV_OBJ_FLAG_SCROLLABLE);
 
-    static const char *method_labels[] = {"Setup PIN Code", "QR Code"};
-    for (int i = 0; i < 2; i++) {
-        commission_method_radios[i] = lv_button_create(method_row);
+    lv_obj_t *method_row2 = lv_obj_create(scr_commission);
+    lv_obj_set_size(method_row2, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(method_row2, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(method_row2, 2, 0);
+    lv_obj_set_style_pad_gap(method_row2, 4, 0);
+    lv_obj_clear_flag(method_row2, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const char *method_labels[] = {"PIN Code", "Disc+Passcode", "Manual Code", "QR Code"};
+    lv_obj_t *method_rows[] = {method_row1, method_row1, method_row2, method_row2};
+    for (int i = 0; i < 4; i++) {
+        commission_method_radios[i] = lv_button_create(method_rows[i]);
         lv_obj_add_flag(commission_method_radios[i], LV_OBJ_FLAG_CHECKABLE);
         lv_obj_t *lbl = lv_label_create(commission_method_radios[i]);
         lv_label_set_text(lbl, method_labels[i]);
@@ -415,7 +473,7 @@ static void create_commission_screen(void) {
         lv_obj_set_style_bg_opa(commission_method_radios[i], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x999999), LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_set_style_border_width(commission_method_radios[i], 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        // Style for selected (checked) state — high contrast
+        // Style for selected (checked) state
         lv_obj_set_style_bg_color(commission_method_radios[i], lv_color_hex(0x00C853), LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_bg_opa(commission_method_radios[i], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
@@ -426,13 +484,25 @@ static void create_commission_screen(void) {
     lv_obj_add_state(commission_method_radios[0], LV_STATE_CHECKED);
     commission_method = 0;
 
+    // Discriminator input (only visible for method 1)
+    commission_disc_label = lv_label_create(scr_commission);
+    lv_label_set_text(commission_disc_label, "Discriminator:");
+    lv_obj_add_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
+
+    commission_disc_ta = lv_textarea_create(scr_commission);
+    lv_textarea_set_one_line(commission_disc_ta, true);
+    lv_textarea_set_placeholder_text(commission_disc_ta, "e.g. 3840");
+    lv_obj_set_width(commission_disc_ta, LV_PCT(100));
+    lv_obj_add_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+    lv_group_add_obj(grp_commission, commission_disc_ta);
+
     // Code input
-    lv_obj_t *code_label = lv_label_create(scr_commission);
-    lv_label_set_text(code_label, "Setup PIN Code or QR Code:");
+    commission_code_label = lv_label_create(scr_commission);
+    lv_label_set_text(commission_code_label, "Setup PIN Code:");
 
     commission_code_ta = lv_textarea_create(scr_commission);
     lv_textarea_set_one_line(commission_code_ta, true);
-    lv_textarea_set_placeholder_text(commission_code_ta, "e.g. 20212020 or MT:...");
+    lv_textarea_set_placeholder_text(commission_code_ta, "e.g. 20212020");
     lv_obj_set_width(commission_code_ta, LV_PCT(100));
     lv_group_add_obj(grp_commission, commission_code_ta);
 

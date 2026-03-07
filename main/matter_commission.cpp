@@ -5,6 +5,8 @@
 #include <esp_matter.h>
 #include <esp_matter_controller_pairing_command.h>
 #include <esp_wifi.h>
+#include <setup_payload/ManualSetupPayloadGenerator.h>
+#include <setup_payload/SetupPayload.h>
 
 static const char *TAG = "matter_comm";
 
@@ -22,6 +24,29 @@ esp_err_t matter_commission_on_network(uint64_t node_id, uint32_t pincode) {
              (unsigned long long)node_id, (unsigned long)pincode);
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     return esp_matter::controller::pairing_on_network(node_id, pincode);
+}
+
+esp_err_t matter_commission_on_network_disc(uint64_t node_id, uint32_t pincode, uint16_t discriminator) {
+    ESP_LOGI(TAG, "Pairing on-network with discriminator: node=0x%llx pin=%lu disc=%u",
+             (unsigned long long)node_id, (unsigned long)pincode, discriminator);
+
+    // Build a manual pairing code from discriminator + passcode, then use pairing_code
+    chip::SetupPayload payload;
+    payload.setUpPINCode = pincode;
+    payload.discriminator.SetLongValue(discriminator);
+    payload.version = 0;
+    payload.rendezvousInformation.SetValue(chip::RendezvousInformationFlags(chip::RendezvousInformationFlag::kOnNetwork));
+
+    std::string manual_code;
+    chip::ManualSetupPayloadGenerator generator(payload);
+    if (generator.payloadDecimalStringRepresentation(manual_code) != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to generate manual pairing code");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Generated manual code: %s", manual_code.c_str());
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    return esp_matter::controller::pairing_code(node_id, manual_code.c_str());
 }
 
 esp_err_t matter_commission_code(uint64_t node_id, const char *payload) {
