@@ -1,0 +1,9 @@
+menu "Badge BSP LVGL"
+	config BSP_LVGL_DSI_DISPLAY
+		bool "A DSI display is used on this platform"
+		default n
+
+	config BSP_LVGL_BIG_ENDIAN_COLOUR
+		bool "The display uses big-endian colour"
+		default n
+endmenu

@@ -11,8 +11,11 @@ SHELL := /usr/bin/env bash
 
 DEVICE ?= tanmatsu # Default target device
 
+ESP_MATTER_PATH ?= $(shell cd .. && pwd)/esp-matter
+
 export IDF_TOOLS_PATH
 export IDF_GITHUB_ASSETS
+export ESP_MATTER_PATH
 
 # General targets
 
