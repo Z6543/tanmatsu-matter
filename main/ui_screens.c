@@ -113,6 +113,16 @@ static void event_timer_cb(lv_timer_t *timer) {
             }
             if (commission_start_btn) lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
             break;
+        case MATTER_EVENT_ATTESTATION_WARNING:
+            if (commission_status_label) {
+                lv_label_set_text(commission_status_label,
+                    "Warning: device attestation failed.\n"
+                    "Commissioning continues but device\n"
+                    "may not be officially certified.");
+                lv_obj_set_style_text_color(commission_status_label,
+                    lv_color_hex(0xFFA000), 0);
+            }
+            break;
         }
     }
 }

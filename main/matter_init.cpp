@@ -9,6 +9,10 @@
 static const char *TAG = "matter_init";
 static matter_event_cb_t s_event_cb = nullptr;
 
+extern "C" void matter_post_event(matter_event_t event) {
+    if (s_event_cb) s_event_cb(event);
+}
+
 static void on_pase_complete(CHIP_ERROR err) {
     if (!s_event_cb) return;
     matter_event_t ev = {};

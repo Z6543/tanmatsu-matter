@@ -14,6 +14,7 @@ typedef enum {
     MATTER_EVENT_COMMISSION_SUCCESS,
     MATTER_EVENT_COMMISSION_FAILED,
     MATTER_EVENT_STACK_READY,
+    MATTER_EVENT_ATTESTATION_WARNING,
 } matter_event_type_t;
 
 typedef struct {
