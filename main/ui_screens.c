@@ -31,6 +31,8 @@ static lv_obj_t *commission_method_radios[5] = {};
 static lv_obj_t *commission_code_ta = NULL;
 static lv_obj_t *commission_disc_ta = NULL;
 static lv_obj_t *commission_disc_label = NULL;
+static lv_obj_t *commission_hints_ta = NULL;
+static lv_obj_t *commission_hints_label = NULL;
 static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
@@ -133,6 +135,7 @@ static void btn_add_cb(lv_event_t *e) {
     if (commission_status_label) lv_label_set_text(commission_status_label, "");
     if (commission_code_ta) lv_textarea_set_text(commission_code_ta, "");
     if (commission_disc_ta) lv_textarea_set_text(commission_disc_ta, "");
+    if (commission_hints_ta) lv_textarea_set_text(commission_hints_ta, "");
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
 }
@@ -144,18 +147,23 @@ static void btn_back_dashboard_cb(lv_event_t *e) {
 }
 
 // ---- Commission screen callbacks ----
-static void update_commission_fields(void) {
-    // Show/hide discriminator field based on method
-    bool show_disc = (commission_method == 1 || commission_method == 4);
-    if (show_disc) {
-        lv_obj_clear_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+static void set_field_visible(lv_obj_t *label, lv_obj_t *ta, bool vis) {
+    if (vis) {
+        lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ta, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_obj_add_flag(commission_disc_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ta, LV_OBJ_FLAG_HIDDEN);
     }
+}
 
-    // Update code field label and placeholder based on method
+static void update_commission_fields(void) {
+    bool show_disc = (commission_method == 1 || commission_method == 4);
+    set_field_visible(commission_disc_label, commission_disc_ta, show_disc);
+
+    bool show_hints = (commission_method == 1);
+    set_field_visible(commission_hints_label, commission_hints_ta, show_hints);
+
     static const char *labels[] = {
         "Setup PIN Code:", "Passcode:", "Manual Pairing Code:",
         "QR Code Payload:", "Passcode:"
@@ -221,21 +229,23 @@ static void btn_start_commission_cb(lv_event_t *e) {
         break;
     }
     case 1: {
-        // Discriminator + Passcode
+        // Discriminator + Passcode with optional discovery hints
         uint32_t pincode = (uint32_t)atol(code_str);
         const char *disc_str = lv_textarea_get_text(commission_disc_ta);
         uint16_t disc = (uint16_t)atoi(disc_str);
-        err = matter_commission_on_network_disc(s_pending_node_id, pincode, disc);
+        const char *hints_str = lv_textarea_get_text(commission_hints_ta);
+        uint8_t hints = (hints_str && hints_str[0]) ? (uint8_t)atoi(hints_str) : 0;
+        err = matter_commission_disc_pass(s_pending_node_id, pincode, disc, hints);
         break;
     }
     case 2: {
-        // Manual pairing code
-        err = matter_commission_code(s_pending_node_id, code_str);
+        // Manual pairing code (auto-detects transport from code)
+        err = matter_commission_setup_code(s_pending_node_id, code_str);
         break;
     }
     case 3: {
-        // QR code payload
-        err = matter_commission_code(s_pending_node_id, code_str);
+        // QR code payload (auto-detects transport from code)
+        err = matter_commission_setup_code(s_pending_node_id, code_str);
         break;
     }
     case 4: {
@@ -569,6 +579,20 @@ static void create_commission_screen(void) {
     lv_obj_set_width(commission_disc_ta, LV_PCT(100));
     lv_obj_add_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
     lv_group_add_obj(grp_commission, commission_disc_ta);
+
+    // Discovery hints (only visible for method 1: Disc+Passcode)
+    commission_hints_label = lv_label_create(scr_commission);
+    lv_label_set_text(commission_hints_label,
+        "Discovery (1=SoftAP 2=BLE 4=IP):");
+    lv_obj_add_flag(commission_hints_label, LV_OBJ_FLAG_HIDDEN);
+
+    commission_hints_ta = lv_textarea_create(scr_commission);
+    lv_textarea_set_one_line(commission_hints_ta, true);
+    lv_textarea_set_placeholder_text(commission_hints_ta,
+        "optional, e.g. 4");
+    lv_obj_set_width(commission_hints_ta, LV_PCT(100));
+    lv_obj_add_flag(commission_hints_ta, LV_OBJ_FLAG_HIDDEN);
+    lv_group_add_obj(grp_commission, commission_hints_ta);
 
     // Code input
     commission_code_label = lv_label_create(scr_commission);

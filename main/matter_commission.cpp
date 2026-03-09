@@ -10,6 +10,8 @@
 #include <controller/CommissioningDelegate.h>
 #include <credentials/attestation_verifier/DeviceAttestationDelegate.h>
 #include <setup_payload/ManualSetupPayloadGenerator.h>
+#include <setup_payload/ManualSetupPayloadParser.h>
+#include <setup_payload/QRCodeSetupPayloadParser.h>
 #include <setup_payload/SetupPayload.h>
 
 static const char *TAG = "matter_comm";
@@ -18,6 +20,7 @@ extern "C" void matter_post_event(matter_event_t event);
 
 using chip::Controller::CommissioningParameters;
 using chip::Controller::DeviceCommissioner;
+using chip::Controller::DiscoveryType;
 using chip::Credentials::AttestationVerificationResult;
 using chip::Credentials::DeviceAttestationDelegate;
 using chip::Credentials::DeviceAttestationVerifier;
@@ -48,8 +51,8 @@ public:
             commissioner->ContinueCommissioningAfterDeviceAttestation(
                 device, AttestationVerificationResult::kSuccess);
         if (err != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG, "ContinueCommissioning failed: %" CHIP_ERROR_FORMAT,
-                     err.Format());
+            ESP_LOGE(TAG, "ContinueCommissioning failed: "
+                     "%" CHIP_ERROR_FORMAT, err.Format());
         }
     }
 };
@@ -71,8 +74,63 @@ static DeviceCommissioner *get_commissioner() {
         .get_commissioner();
 }
 
-// Inject attestation delegate into the commissioner's current params.
-// Must be called after PairDevice or before Commission.
+static esp_err_t check_idle_and_register() {
+    auto *comm = get_commissioner();
+    if (comm->GetPairingDelegate() != nullptr) {
+        ESP_LOGE(TAG, "Another pairing is already in progress");
+        return ESP_ERR_INVALID_STATE;
+    }
+    comm->RegisterPairingDelegate(
+        &esp_matter::controller::pairing_command::get_instance());
+    return ESP_OK;
+}
+
+// Determine if discovery hints indicate BLE or SoftAP transport
+static bool hints_need_wifi_creds(uint8_t hints) {
+    return (hints & DISC_HINT_BLE) || (hints & DISC_HINT_SOFTAP);
+}
+
+static DiscoveryType hints_to_discovery_type(uint8_t hints) {
+    if (hints_need_wifi_creds(hints)) return DiscoveryType::kAll;
+    return DiscoveryType::kDiscoveryNetworkOnly;
+}
+
+// Build CommissioningParameters with attestation delegate and
+// optionally WiFi credentials based on discovery hints.
+static esp_err_t build_params(
+    CommissioningParameters &params, uint8_t hints) {
+    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
+
+    if (hints_need_wifi_creds(hints)) {
+        char ssid[33] = {};
+        char pwd[65] = {};
+        esp_err_t err =
+            get_wifi_creds(ssid, sizeof(ssid), pwd, sizeof(pwd));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get WiFi credentials");
+            return err;
+        }
+        chip::ByteSpan nameSpan(
+            reinterpret_cast<const uint8_t *>(ssid), strlen(ssid));
+        chip::ByteSpan pwdSpan(
+            reinterpret_cast<const uint8_t *>(pwd), strlen(pwd));
+        params.SetWiFiCredentials(
+            chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
+    }
+    return ESP_OK;
+}
+
+// Extract discovery hints from a parsed SetupPayload
+static uint8_t hints_from_payload(const chip::SetupPayload &payload) {
+    if (!payload.rendezvousInformation.HasValue()) {
+        return DISC_HINT_ON_NET;
+    }
+    return payload.rendezvousInformation.Value().Raw();
+}
+
+// Inject attestation delegate into the commissioner's current
+// params. Used for the on_network discovery flow where we don't
+// control CommissioningParameters creation.
 static void inject_attestation_delegate() {
     auto *comm = get_commissioner();
     CommissioningParameters params = comm->GetCommissioningParameters();
@@ -80,30 +138,35 @@ static void inject_attestation_delegate() {
     comm->UpdateCommissioningParameters(params);
 }
 
+// --- Public API ---
+
 esp_err_t matter_commission_on_network(
     uint64_t node_id, uint32_t pincode) {
     ESP_LOGI(TAG, "Pairing on-network: node=0x%llx pin=%lu",
              (unsigned long long)node_id, (unsigned long)pincode);
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-
-    // Pre-inject delegate, then use SDK wrapper for discovery flow
     inject_attestation_delegate();
-    return esp_matter::controller::pairing_on_network(node_id, pincode);
+    return esp_matter::controller::pairing_on_network(
+        node_id, pincode);
 }
 
-esp_err_t matter_commission_on_network_disc(
-    uint64_t node_id, uint32_t pincode, uint16_t discriminator) {
-    ESP_LOGI(TAG, "Pairing on-network disc: node=0x%llx pin=%lu disc=%u",
-             (unsigned long long)node_id, (unsigned long)pincode,
-             discriminator);
+esp_err_t matter_commission_disc_pass(
+    uint64_t node_id, uint32_t pincode, uint16_t discriminator,
+    uint8_t discovery_hints) {
+
+    // Default to on-network if no hints provided
+    if (discovery_hints == 0) discovery_hints = DISC_HINT_ON_NET;
+
+    ESP_LOGI(TAG, "Pairing disc+pass: node=0x%llx pin=%lu disc=%u "
+             "hints=0x%02x", (unsigned long long)node_id,
+             (unsigned long)pincode, discriminator, discovery_hints);
 
     chip::SetupPayload payload;
     payload.setUpPINCode = pincode;
     payload.discriminator.SetLongValue(discriminator);
     payload.version = 0;
     payload.rendezvousInformation.SetValue(
-        chip::RendezvousInformationFlags(
-            chip::RendezvousInformationFlag::kOnNetwork));
+        chip::RendezvousInformationFlags(discovery_hints));
 
     std::string manual_code;
     chip::ManualSetupPayloadGenerator generator(payload);
@@ -115,77 +178,49 @@ esp_err_t matter_commission_on_network_disc(
 
     ESP_LOGI(TAG, "Generated manual code: %s", manual_code.c_str());
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-
-    auto *comm = get_commissioner();
-    if (comm->GetPairingDelegate() != nullptr) {
-        ESP_LOGE(TAG, "Another pairing is already in progress");
-        return ESP_ERR_INVALID_STATE;
-    }
-    comm->RegisterPairingDelegate(
-        &esp_matter::controller::pairing_command::get_instance());
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
     CommissioningParameters params;
-    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
-    comm->PairDevice(
+    ESP_RETURN_ON_ERROR(
+        build_params(params, discovery_hints), TAG, "Params");
+    get_commissioner()->PairDevice(
         node_id, manual_code.c_str(), params,
-        chip::Controller::DiscoveryType::kDiscoveryNetworkOnly);
+        hints_to_discovery_type(discovery_hints));
     return ESP_OK;
 }
 
-esp_err_t matter_commission_code(
-    uint64_t node_id, const char *payload) {
-    ESP_LOGI(TAG, "Pairing code on-network: node=0x%llx payload=%s",
-             (unsigned long long)node_id, payload);
-    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+esp_err_t matter_commission_setup_code(
+    uint64_t node_id, const char *code) {
+    ESP_LOGI(TAG, "Pairing setup code: node=0x%llx code=%s",
+             (unsigned long long)node_id, code);
 
-    auto *comm = get_commissioner();
-    if (comm->GetPairingDelegate() != nullptr) {
-        ESP_LOGE(TAG, "Another pairing is already in progress");
-        return ESP_ERR_INVALID_STATE;
+    // Try to parse the code to extract discovery hints
+    chip::SetupPayload payload;
+    uint8_t hints = DISC_HINT_ON_NET;
+
+    if (code[0] == 'M' && code[1] == 'T') {
+        // QR code format
+        chip::QRCodeSetupPayloadParser qr_parser(code);
+        if (qr_parser.populatePayload(payload) == CHIP_NO_ERROR) {
+            hints = hints_from_payload(payload);
+            ESP_LOGI(TAG, "QR code parsed: hints=0x%02x", hints);
+        }
+    } else {
+        // Manual numeric code
+        chip::ManualSetupPayloadParser manual_parser(code);
+        if (manual_parser.populatePayload(payload) == CHIP_NO_ERROR) {
+            hints = hints_from_payload(payload);
+            ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x", hints);
+        }
     }
-    comm->RegisterPairingDelegate(
-        &esp_matter::controller::pairing_command::get_instance());
+
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
     CommissioningParameters params;
-    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
-    comm->PairDevice(
-        node_id, payload, params,
-        chip::Controller::DiscoveryType::kDiscoveryNetworkOnly);
-    return ESP_OK;
-}
-
-esp_err_t matter_commission_code_wifi(
-    uint64_t node_id, const char *payload) {
-    char ssid[33] = {};
-    char pwd[65] = {};
-    esp_err_t err = get_wifi_creds(ssid, sizeof(ssid), pwd, sizeof(pwd));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get WiFi credentials");
-        return err;
-    }
-    ESP_LOGI(TAG, "Pairing code WiFi: node=0x%llx payload=%s ssid=%s",
-             (unsigned long long)node_id, payload, ssid);
-    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-
-    auto *comm = get_commissioner();
-    if (comm->GetPairingDelegate() != nullptr) {
-        ESP_LOGE(TAG, "Another pairing is already in progress");
-        return ESP_ERR_INVALID_STATE;
-    }
-    comm->RegisterPairingDelegate(
-        &esp_matter::controller::pairing_command::get_instance());
-
-    chip::ByteSpan nameSpan(
-        reinterpret_cast<const uint8_t *>(ssid), strlen(ssid));
-    chip::ByteSpan pwdSpan(
-        reinterpret_cast<const uint8_t *>(pwd), strlen(pwd));
-    CommissioningParameters params;
-    params.SetWiFiCredentials(
-        chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
-    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
-    comm->PairDevice(
-        node_id, payload, params,
-        chip::Controller::DiscoveryType::kAll);
+    ESP_RETURN_ON_ERROR(build_params(params, hints), TAG, "Params");
+    get_commissioner()->PairDevice(
+        node_id, code, params, hints_to_discovery_type(hints));
     return ESP_OK;
 }
 
@@ -198,18 +233,11 @@ esp_err_t matter_commission_ble_wifi(
         ESP_LOGE(TAG, "Failed to get WiFi credentials");
         return err;
     }
-    ESP_LOGI(TAG, "Pairing BLE+WiFi: node=0x%llx pin=%lu disc=%u ssid=%s",
-             (unsigned long long)node_id, (unsigned long)pincode,
-             discriminator, ssid);
+    ESP_LOGI(TAG, "Pairing BLE+WiFi: node=0x%llx pin=%lu disc=%u "
+             "ssid=%s", (unsigned long long)node_id,
+             (unsigned long)pincode, discriminator, ssid);
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-
-    auto *comm = get_commissioner();
-    if (comm->GetPairingDelegate() != nullptr) {
-        ESP_LOGE(TAG, "Another pairing is already in progress");
-        return ESP_ERR_INVALID_STATE;
-    }
-    comm->RegisterPairingDelegate(
-        &esp_matter::controller::pairing_command::get_instance());
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
     chip::RendezvousParameters rendezvous =
         chip::RendezvousParameters()
@@ -225,7 +253,7 @@ esp_err_t matter_commission_ble_wifi(
     params.SetWiFiCredentials(
         chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
-    comm->PairDevice(node_id, rendezvous, params);
+    get_commissioner()->PairDevice(node_id, rendezvous, params);
     return ESP_OK;
 }
 
