@@ -53,8 +53,7 @@ static char const TAG[] = "bsp-lvgl";
 
 #define LVGL_TICK_PERIOD_MS 2
 
-// #define LVGL_TASK_STACK_SIZE (128 * 1024)
-#define LVGL_TASK_STACK_SIZE (16 * 1024)
+#define LVGL_TASK_STACK_SIZE (32 * 1024)
 
 // LVGL library is not thread-safe, this example will call LVGL APIs from different tasks, so use a mutex to protect it
 static _lock_t lvgl_api_lock;

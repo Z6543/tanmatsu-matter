@@ -206,10 +206,12 @@ esp_err_t matter_commission_setup_code(
             ESP_LOGI(TAG, "QR code parsed: hints=0x%02x", hints);
         }
     } else {
-        // Manual numeric code
+        // Manual numeric codes never encode rendezvous info, so
+        // always try BLE + on-network to support uncommissioned
+        // BLE+WiFi devices.
         chip::ManualSetupPayloadParser manual_parser(code);
         if (manual_parser.populatePayload(payload) == CHIP_NO_ERROR) {
-            hints = hints_from_payload(payload);
+            hints = DISC_HINT_BLE | DISC_HINT_ON_NET;
             ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x", hints);
         }
     }
