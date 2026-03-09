@@ -70,6 +70,7 @@ static QueueHandle_t input_queue = NULL;
 static lv_display_t* display = NULL;
 
 static SemaphoreHandle_t tearing_effect_semaphore = NULL;
+static SemaphoreHandle_t ppa_done_semaphore = NULL;
 
 void lvgl_lock() {
     _lock_acquire(&lvgl_api_lock);
@@ -112,9 +113,9 @@ lv_display_rotation_t lvgl_rotation_relative_to_default(lv_display_rotation_t ro
 
 #ifdef CONFIG_IDF_TARGET_ESP32P4
 bool rotation_done_cb(ppa_client_handle_t ppa_handle, ppa_event_data_t* ppa_event_data, void* user_data) {
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel_handle, rotated_area.x1, rotated_area.y1, rotated_area.x2 + 1,
-                                              rotated_area.y2 + 1, rotation_buffer));
-
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    xSemaphoreGiveFromISR(ppa_done_semaphore, &xHigherPriorityTaskWoken);
+    if (xHigherPriorityTaskWoken) portYIELD_FROM_ISR();
     return false;
 }
 #endif
@@ -209,6 +210,12 @@ void lvgl_flush_cb(lv_display_t* disp, lv_area_t const* area, uint8_t* px_map) {
     };
 
     ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &ppa_srm_config));
+
+    // Wait for PPA to finish, then draw from task context (not ISR)
+    xSemaphoreTake(ppa_done_semaphore, portMAX_DELAY);
+    esp_lcd_panel_draw_bitmap(panel_handle, rotated_area.x1, rotated_area.y1,
+                              rotated_area.x2 + 1, rotated_area.y2 + 1,
+                              rotation_buffer);
 #else
     uint32_t w_stride = lv_draw_buf_width_to_stride(w, cf);
     uint32_t h_stride = lv_draw_buf_width_to_stride(h, cf);
@@ -435,6 +442,7 @@ void lvgl_init(int32_t hres, int32_t vres, lcd_color_rgb_pixel_format_t colour_f
         .data_burst_length     = PPA_DATA_BURST_LENGTH_128,
     };
     ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
+    ppa_done_semaphore = xSemaphoreCreateBinary();
 
     ppa_event_callbacks_t ppa_srm_callbacks = {
         .on_trans_done = rotation_done_cb,
