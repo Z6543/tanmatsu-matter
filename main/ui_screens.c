@@ -384,6 +384,18 @@ static void hint_add_text(lv_obj_t *bar, const char *text) {
     lv_obj_set_style_text_color(lbl, lv_color_hex(0xAAAAAA), 0);
 }
 
+// Apply a strong, consistent focus indicator to any focusable widget.
+// Uses a thick cyan border so keyboard focus is immediately obvious.
+static void apply_focus_style(lv_obj_t *obj) {
+    lv_obj_set_style_border_color(obj, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_opa(obj, LV_OPA_COVER, LV_STATE_FOCUSED);
+    // Also cover focused+checked combo (e.g. checkable radio buttons)
+    lv_obj_set_style_border_color(obj, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED | LV_STATE_CHECKED);
+    lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED | LV_STATE_CHECKED);
+    lv_obj_set_style_border_opa(obj, LV_OPA_COVER, LV_STATE_FOCUSED | LV_STATE_CHECKED);
+}
+
 static lv_obj_t *create_key_hints_bar(lv_obj_t *parent) {
     lv_obj_t *bar = lv_obj_create(parent);
     lv_obj_set_size(bar, LV_PCT(100), 24);
@@ -412,6 +424,7 @@ static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, LV_SYMBOL_LEFT " Back");
         lv_obj_add_event_cb(btn, back_cb, LV_EVENT_CLICKED, NULL);
+        apply_focus_style(btn);
         if (grp) lv_group_add_obj(grp, btn);
     }
 
@@ -444,6 +457,7 @@ static void create_dashboard_screen(void) {
     lv_obj_t *add_lbl = lv_label_create(add_btn);
     lv_label_set_text(add_lbl, LV_SYMBOL_PLUS " Add");
     lv_obj_add_event_cb(add_btn, btn_add_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(add_btn);
     lv_group_add_obj(grp_dashboard, add_btn);
 
     // Device cards container
@@ -516,10 +530,12 @@ static void refresh_dashboard(void) {
         lv_obj_add_event_cb(card, card_key_cb, LV_EVENT_KEY, user_data);
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
 
-        // Focus style: bright border when focused via keyboard
-        lv_obj_set_style_outline_width(card, 3, LV_STATE_FOCUSED);
+        // Focus style: thick bright outline + border when focused via keyboard
+        lv_obj_set_style_outline_width(card, 4, LV_STATE_FOCUSED);
         lv_obj_set_style_outline_color(card, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED);
-        lv_obj_set_style_outline_pad(card, 2, LV_STATE_FOCUSED);
+        lv_obj_set_style_outline_pad(card, 3, LV_STATE_FOCUSED);
+        lv_obj_set_style_border_color(card, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_width(card, 3, LV_STATE_FOCUSED);
 
         lv_group_add_obj(grp_dashboard, card);
     }
@@ -563,6 +579,7 @@ static void create_commission_screen(void) {
         lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_width(commission_method_radios[i], 2, LV_PART_MAIN | LV_STATE_CHECKED);
         lv_obj_set_style_border_color(commission_method_radios[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_CHECKED);
+        apply_focus_style(commission_method_radios[i]);
         lv_group_add_obj(grp_commission, commission_method_radios[i]);
     }
     lv_obj_add_state(commission_method_radios[0], LV_STATE_CHECKED);
@@ -578,6 +595,7 @@ static void create_commission_screen(void) {
     lv_textarea_set_placeholder_text(commission_disc_ta, "e.g. 3840");
     lv_obj_set_width(commission_disc_ta, LV_PCT(100));
     lv_obj_add_flag(commission_disc_ta, LV_OBJ_FLAG_HIDDEN);
+    apply_focus_style(commission_disc_ta);
     lv_group_add_obj(grp_commission, commission_disc_ta);
 
     // Discovery hints (only visible for method 1: Disc+Passcode)
@@ -592,6 +610,7 @@ static void create_commission_screen(void) {
         "optional, e.g. 4");
     lv_obj_set_width(commission_hints_ta, LV_PCT(100));
     lv_obj_add_flag(commission_hints_ta, LV_OBJ_FLAG_HIDDEN);
+    apply_focus_style(commission_hints_ta);
     lv_group_add_obj(grp_commission, commission_hints_ta);
 
     // Code input
@@ -602,6 +621,7 @@ static void create_commission_screen(void) {
     lv_textarea_set_one_line(commission_code_ta, true);
     lv_textarea_set_placeholder_text(commission_code_ta, "e.g. 20212020");
     lv_obj_set_width(commission_code_ta, LV_PCT(100));
+    apply_focus_style(commission_code_ta);
     lv_group_add_obj(grp_commission, commission_code_ta);
 
     // Device name
@@ -612,6 +632,7 @@ static void create_commission_screen(void) {
     lv_textarea_set_one_line(commission_name_ta, true);
     lv_textarea_set_placeholder_text(commission_name_ta, "My Light");
     lv_obj_set_width(commission_name_ta, LV_PCT(100));
+    apply_focus_style(commission_name_ta);
     lv_group_add_obj(grp_commission, commission_name_ta);
 
     // Start button
@@ -621,6 +642,7 @@ static void create_commission_screen(void) {
     lv_label_set_text(start_lbl, "Start Commissioning");
     lv_obj_center(start_lbl);
     lv_obj_add_event_cb(commission_start_btn, btn_start_commission_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(commission_start_btn);
     lv_group_add_obj(grp_commission, commission_start_btn);
 
     // Status label
@@ -664,18 +686,21 @@ static void create_detail_screen(void) {
     lv_obj_t *on_lbl = lv_label_create(on_btn);
     lv_label_set_text(on_lbl, "ON");
     lv_obj_add_event_cb(on_btn, btn_on_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(on_btn);
     lv_group_add_obj(grp_detail, on_btn);
 
     lv_obj_t *off_btn = lv_button_create(btn_row);
     lv_obj_t *off_lbl = lv_label_create(off_btn);
     lv_label_set_text(off_lbl, "OFF");
     lv_obj_add_event_cb(off_btn, btn_off_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(off_btn);
     lv_group_add_obj(grp_detail, off_btn);
 
     lv_obj_t *toggle_btn = lv_button_create(btn_row);
     lv_obj_t *toggle_lbl = lv_label_create(toggle_btn);
     lv_label_set_text(toggle_lbl, "TOGGLE");
     lv_obj_add_event_cb(toggle_btn, btn_toggle_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(toggle_btn);
     lv_group_add_obj(grp_detail, toggle_btn);
 
     // Info label
@@ -693,12 +718,14 @@ static void create_detail_screen(void) {
     lv_textarea_set_one_line(detail_rename_ta, true);
     lv_textarea_set_placeholder_text(detail_rename_ta, "New name");
     lv_obj_set_flex_grow(detail_rename_ta, 1);
+    apply_focus_style(detail_rename_ta);
     lv_group_add_obj(grp_detail, detail_rename_ta);
 
     lv_obj_t *save_btn = lv_button_create(rename_row);
     lv_obj_t *save_lbl = lv_label_create(save_btn);
     lv_label_set_text(save_lbl, "Save");
     lv_obj_add_event_cb(save_btn, btn_rename_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(save_btn);
     lv_group_add_obj(grp_detail, save_btn);
 
     // Unpair button
@@ -709,6 +736,7 @@ static void create_detail_screen(void) {
     lv_label_set_text(unpair_lbl, "Unpair Device");
     lv_obj_center(unpair_lbl);
     lv_obj_add_event_cb(unpair_btn, btn_unpair_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(unpair_btn);
     lv_group_add_obj(grp_detail, unpair_btn);
 
     lv_obj_t *detail_hints = create_key_hints_bar(scr_detail);
