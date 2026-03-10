@@ -13,6 +13,7 @@
 #include <setup_payload/ManualSetupPayloadParser.h>
 #include <setup_payload/QRCodeSetupPayloadParser.h>
 #include <setup_payload/SetupPayload.h>
+#include <lib/support/ThreadOperationalDataset.h>
 
 static const char *TAG = "matter_comm";
 
@@ -256,6 +257,67 @@ esp_err_t matter_commission_ble_wifi(
         chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
     get_commissioner()->PairDevice(node_id, rendezvous, params);
+    return ESP_OK;
+}
+
+static int hex_char_to_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int hex_to_bytes(
+    const char *hex, uint8_t *out, size_t out_len) {
+    size_t hex_len = strlen(hex);
+    if (hex_len % 2 != 0) return -1;
+    size_t byte_len = hex_len / 2;
+    if (byte_len > out_len) return -1;
+    for (size_t i = 0; i < byte_len; i++) {
+        int hi = hex_char_to_nibble(hex[i * 2]);
+        int lo = hex_char_to_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return (int)byte_len;
+}
+
+esp_err_t matter_commission_setup_code_thread(
+    uint64_t node_id, const char *code,
+    const char *dataset_hex) {
+    ESP_LOGI(TAG, "Pairing setup code+Thread: node=0x%llx code=%s",
+             (unsigned long long)node_id, code);
+
+    uint8_t dataset_buf[chip::Thread::kSizeOperationalDataset];
+    int dataset_len = hex_to_bytes(
+        dataset_hex, dataset_buf, sizeof(dataset_buf));
+    if (dataset_len <= 0) {
+        ESP_LOGE(TAG, "Invalid Thread dataset hex string");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    chip::Thread::OperationalDataset dataset;
+    if (dataset.Init(chip::ByteSpan(dataset_buf, dataset_len))
+        != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Failed to parse Thread dataset TLV");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char net_name[chip::Thread::kSizeNetworkName + 1] = {};
+    if (dataset.GetNetworkName(net_name) == CHIP_NO_ERROR) {
+        ESP_LOGI(TAG, "Thread network: %s", net_name);
+    }
+
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
+
+    CommissioningParameters params;
+    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
+    params.SetThreadOperationalDataset(
+        chip::ByteSpan(dataset_buf, dataset_len));
+
+    get_commissioner()->PairDevice(
+        node_id, code, params, DiscoveryType::kAll);
     return ESP_OK;
 }
 

@@ -40,3 +40,12 @@ idf_build_set_property(CXX_COMPILE_OPTIONS "-std=gnu++17;-Os;-DCHIP_HAVE_CONFIG_
 idf_build_set_property(C_COMPILE_OPTIONS "-Os" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-D_NO_GENERIC_THREAD_NETWORK_COMMISSIONING_DRIVER_" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-Wno-format-nonliteral;-Wno-format-security;-Wformat=0;-Wno-undef" APPEND)
+
+# The prebuilt libopenthread_br.a references mDNS symbols but the
+# openthread component does not declare that dependency for the
+# border router case. Fix the link order here.
+if(CONFIG_OPENTHREAD_BORDER_ROUTER)
+	idf_component_get_property(mdns_lib espressif__mdns COMPONENT_LIB)
+	idf_component_get_property(ot_lib openthread COMPONENT_LIB)
+	target_link_libraries(${ot_lib} PUBLIC ${mdns_lib})
+endif()

@@ -27,17 +27,20 @@ static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
 
 // Commission widgets
-static lv_obj_t *commission_method_radios[5] = {};
+#define NUM_COMMISSION_METHODS 6
+static lv_obj_t *commission_method_radios[NUM_COMMISSION_METHODS] = {};
 static lv_obj_t *commission_code_ta = NULL;
 static lv_obj_t *commission_disc_ta = NULL;
 static lv_obj_t *commission_disc_label = NULL;
 static lv_obj_t *commission_hints_ta = NULL;
 static lv_obj_t *commission_hints_label = NULL;
+static lv_obj_t *commission_thread_ta = NULL;
+static lv_obj_t *commission_thread_label = NULL;
 static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
 static lv_obj_t *commission_start_btn = NULL;
-// 0=Setup PIN Code, 1=Disc+Passcode, 2=Manual Code, 3=QR Code, 4=BLE+WiFi
+// 0=PIN, 1=Disc+Pass, 2=Manual, 3=QR, 4=BLE+WiFi, 5=Thread
 static int       commission_method = 0;
 
 // Detail widgets
@@ -46,6 +49,22 @@ static lv_obj_t *detail_state_label = NULL;
 static lv_obj_t *detail_info_label = NULL;
 static lv_obj_t *detail_rename_ta = NULL;
 static uint64_t  detail_node_id = 0;
+
+// Default Thread operational dataset (hex TLV) for the Tanmatsu
+// ESP32-C6 OT RCP via Spinel.
+// Channel 15, PAN ID 0x1234, network "Tanmatsu", development keys.
+// Replace with your OTBR's active dataset for production use.
+#define DEFAULT_THREAD_DATASET \
+    "0e080000000000010000" /* Active Timestamp = 1 */ \
+    "000300000f"           /* Channel 15 */ \
+    "3506000407fff800"     /* Channel Mask (11-26) */ \
+    "0208dead00beef00cafe" /* Extended PAN ID */ \
+    "0708fd000db800a00000" /* Mesh Local Prefix */ \
+    "0510" "00112233445566778899aabbccddeeff" /* Network Key */ \
+    "030854616e6d61747375" /* Network Name "Tanmatsu" */ \
+    "01021234"             /* PAN ID 0x1234 */ \
+    "0410" "3aa55f91ca47d1e4e71a08cb35e91591" /* PSKc */ \
+    "0c0402a0f7f8"         /* Security Policy */
 
 // Commissioning state
 static uint64_t s_pending_node_id = 0;
@@ -136,6 +155,7 @@ static void btn_add_cb(lv_event_t *e) {
     if (commission_code_ta) lv_textarea_set_text(commission_code_ta, "");
     if (commission_disc_ta) lv_textarea_set_text(commission_disc_ta, "");
     if (commission_hints_ta) lv_textarea_set_text(commission_hints_ta, "");
+    if (commission_thread_ta) lv_textarea_set_text(commission_thread_ta, DEFAULT_THREAD_DATASET);
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
 }
@@ -164,13 +184,16 @@ static void update_commission_fields(void) {
     bool show_hints = (commission_method == 1);
     set_field_visible(commission_hints_label, commission_hints_ta, show_hints);
 
+    bool show_thread = (commission_method == 5);
+    set_field_visible(commission_thread_label, commission_thread_ta, show_thread);
+
     static const char *labels[] = {
         "Setup PIN Code:", "Passcode:", "Manual Pairing Code:",
-        "QR Code Payload:", "Passcode:"
+        "QR Code Payload:", "Passcode:", "Setup Code:"
     };
     static const char *placeholders[] = {
         "e.g. 20212020", "e.g. 20212020", "e.g. 34970112332",
-        "e.g. MT:...", "e.g. 20212020"
+        "e.g. MT:...", "e.g. 20212020", "Manual or QR code"
     };
     lv_label_set_text(commission_code_label, labels[commission_method]);
     lv_textarea_set_placeholder_text(commission_code_ta, placeholders[commission_method]);
@@ -178,7 +201,7 @@ static void update_commission_fields(void) {
 
 static void method_radio_cb(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
         if (obj == commission_method_radios[i]) {
             commission_method = i;
             lv_obj_add_state(commission_method_radios[i], LV_STATE_CHECKED);
@@ -198,10 +221,18 @@ static void btn_start_commission_cb(lv_event_t *e) {
         static const char *prompts[] = {
             "Enter setup PIN code!", "Enter passcode!",
             "Enter manual pairing code!", "Enter QR code payload!",
-            "Enter passcode!"
+            "Enter passcode!", "Enter setup code!"
         };
         lv_label_set_text(commission_status_label, prompts[commission_method]);
         return;
+    }
+
+    if (commission_method == 5) {
+        const char *thread_str = lv_textarea_get_text(commission_thread_ta);
+        if (!thread_str || thread_str[0] == '\0') {
+            lv_label_set_text(commission_status_label, "Enter Thread dataset!");
+            return;
+        }
     }
 
     if (commission_method == 1 || commission_method == 4) {
@@ -254,6 +285,13 @@ static void btn_start_commission_cb(lv_event_t *e) {
         const char *disc_str = lv_textarea_get_text(commission_disc_ta);
         uint16_t disc = (uint16_t)atoi(disc_str);
         err = matter_commission_ble_wifi(s_pending_node_id, pincode, disc);
+        break;
+    }
+    case 5: {
+        // Thread: setup code + Thread operational dataset (hex TLV)
+        const char *thread_str = lv_textarea_get_text(commission_thread_ta);
+        err = matter_commission_setup_code_thread(
+            s_pending_node_id, code_str, thread_str);
         break;
     }
     }
@@ -560,9 +598,9 @@ static void create_commission_screen(void) {
     lv_obj_clear_flag(method_row, LV_OBJ_FLAG_SCROLLABLE);
 
     static const char *method_labels[] = {
-        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi"
+        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi", "Thread"
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
         commission_method_radios[i] = lv_button_create(method_row);
         lv_obj_add_flag(commission_method_radios[i], LV_OBJ_FLAG_CHECKABLE);
         lv_obj_t *lbl = lv_label_create(commission_method_radios[i]);
@@ -612,6 +650,22 @@ static void create_commission_screen(void) {
     lv_obj_add_flag(commission_hints_ta, LV_OBJ_FLAG_HIDDEN);
     apply_focus_style(commission_hints_ta);
     lv_group_add_obj(grp_commission, commission_hints_ta);
+
+    // Thread dataset (only visible for method 5: Thread)
+    commission_thread_label = lv_label_create(scr_commission);
+    lv_label_set_text(commission_thread_label,
+        "Thread Dataset (hex TLV):");
+    lv_obj_add_flag(commission_thread_label, LV_OBJ_FLAG_HIDDEN);
+
+    commission_thread_ta = lv_textarea_create(scr_commission);
+    lv_textarea_set_one_line(commission_thread_ta, true);
+    lv_textarea_set_text(commission_thread_ta, DEFAULT_THREAD_DATASET);
+    lv_textarea_set_placeholder_text(commission_thread_ta,
+        "Thread dataset hex TLV from OTBR");
+    lv_obj_set_width(commission_thread_ta, LV_PCT(100));
+    lv_obj_add_flag(commission_thread_ta, LV_OBJ_FLAG_HIDDEN);
+    apply_focus_style(commission_thread_ta);
+    lv_group_add_obj(grp_commission, commission_thread_ta);
 
     // Code input
     commission_code_label = lv_label_create(scr_commission);

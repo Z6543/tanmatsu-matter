@@ -20,6 +20,8 @@ idf_component_register(
 		esp_matter
 		esp_matter_controller
 		esp_wifi
+		openthread
+		espressif__mdns
 	INCLUDE_DIRS
 		"."
 	EMBED_FILES
