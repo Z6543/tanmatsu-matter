@@ -282,11 +282,12 @@ static int hex_to_bytes(
     return (int)byte_len;
 }
 
-esp_err_t matter_commission_setup_code_thread(
-    uint64_t node_id, const char *code,
+esp_err_t matter_commission_ble_thread(
+    uint64_t node_id, uint32_t pincode, uint16_t discriminator,
     const char *dataset_hex) {
-    ESP_LOGI(TAG, "Pairing setup code+Thread: node=0x%llx code=%s",
-             (unsigned long long)node_id, code);
+    ESP_LOGI(TAG, "Pairing BLE+Thread: node=0x%llx pin=%lu disc=%u",
+             (unsigned long long)node_id,
+             (unsigned long)pincode, discriminator);
 
     uint8_t dataset_buf[chip::Thread::kSizeOperationalDataset];
     int dataset_len = hex_to_bytes(
@@ -311,13 +312,18 @@ esp_err_t matter_commission_setup_code_thread(
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
+    chip::RendezvousParameters rendezvous =
+        chip::RendezvousParameters()
+            .SetSetupPINCode(pincode)
+            .SetDiscriminator(discriminator)
+            .SetPeerAddress(chip::Transport::PeerAddress::BLE());
+
     CommissioningParameters params;
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
     params.SetThreadOperationalDataset(
         chip::ByteSpan(dataset_buf, dataset_len));
 
-    get_commissioner()->PairDevice(
-        node_id, code, params, DiscoveryType::kAll);
+    get_commissioner()->PairDevice(node_id, rendezvous, params);
     return ESP_OK;
 }
 

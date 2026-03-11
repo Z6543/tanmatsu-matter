@@ -40,7 +40,7 @@ static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
 static lv_obj_t *commission_start_btn = NULL;
-// 0=PIN, 1=Disc+Pass, 2=Manual, 3=QR, 4=BLE+WiFi, 5=Thread
+// 0=PIN, 1=Disc+Pass, 2=Manual, 3=QR, 4=BLE+WiFi, 5=BLE+Thread
 static int       commission_method = 0;
 
 // Detail widgets
@@ -178,7 +178,9 @@ static void set_field_visible(lv_obj_t *label, lv_obj_t *ta, bool vis) {
 }
 
 static void update_commission_fields(void) {
-    bool show_disc = (commission_method == 1 || commission_method == 4);
+    bool show_disc = (commission_method == 1 ||
+                      commission_method == 4 ||
+                      commission_method == 5);
     set_field_visible(commission_disc_label, commission_disc_ta, show_disc);
 
     bool show_hints = (commission_method == 1);
@@ -189,11 +191,11 @@ static void update_commission_fields(void) {
 
     static const char *labels[] = {
         "Setup PIN Code:", "Passcode:", "Manual Pairing Code:",
-        "QR Code Payload:", "Passcode:", "Setup Code:"
+        "QR Code Payload:", "Passcode:", "Passcode:"
     };
     static const char *placeholders[] = {
         "e.g. 20212020", "e.g. 20212020", "e.g. 34970112332",
-        "e.g. MT:...", "e.g. 20212020", "Manual or QR code"
+        "e.g. MT:...", "e.g. 20212020", "e.g. 20212020"
     };
     lv_label_set_text(commission_code_label, labels[commission_method]);
     lv_textarea_set_placeholder_text(commission_code_ta, placeholders[commission_method]);
@@ -221,7 +223,7 @@ static void btn_start_commission_cb(lv_event_t *e) {
         static const char *prompts[] = {
             "Enter setup PIN code!", "Enter passcode!",
             "Enter manual pairing code!", "Enter QR code payload!",
-            "Enter passcode!", "Enter setup code!"
+            "Enter passcode!", "Enter passcode!"
         };
         lv_label_set_text(commission_status_label, prompts[commission_method]);
         return;
@@ -235,7 +237,8 @@ static void btn_start_commission_cb(lv_event_t *e) {
         }
     }
 
-    if (commission_method == 1 || commission_method == 4) {
+    if (commission_method == 1 || commission_method == 4 ||
+        commission_method == 5) {
         const char *disc_str = lv_textarea_get_text(commission_disc_ta);
         if (!disc_str || disc_str[0] == '\0') {
             lv_label_set_text(commission_status_label, "Enter discriminator!");
@@ -288,10 +291,13 @@ static void btn_start_commission_cb(lv_event_t *e) {
         break;
     }
     case 5: {
-        // Thread: setup code + Thread operational dataset (hex TLV)
+        // BLE+Thread: discover via BLE, commission with Thread dataset
+        uint32_t pincode = (uint32_t)atol(code_str);
+        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+        uint16_t disc = (uint16_t)atoi(disc_str);
         const char *thread_str = lv_textarea_get_text(commission_thread_ta);
-        err = matter_commission_setup_code_thread(
-            s_pending_node_id, code_str, thread_str);
+        err = matter_commission_ble_thread(
+            s_pending_node_id, pincode, disc, thread_str);
         break;
     }
     }
@@ -598,7 +604,7 @@ static void create_commission_screen(void) {
     lv_obj_clear_flag(method_row, LV_OBJ_FLAG_SCROLLABLE);
 
     static const char *method_labels[] = {
-        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi", "Thread"
+        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi", "BLE+Thread"
     };
     for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
         commission_method_radios[i] = lv_button_create(method_row);
