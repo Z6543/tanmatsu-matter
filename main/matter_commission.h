@@ -31,6 +31,8 @@ esp_err_t matter_commission_ble_thread(
 
 esp_err_t matter_device_unpair(uint64_t node_id);
 
+void matter_commission_cancel_timeout(void);
+
 #ifdef __cplusplus
 }
 #endif

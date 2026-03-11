@@ -1,3 +1,4 @@
+#include "matter_commission.h"
 #include "matter_init.h"
 
 #include <esp_log.h>
@@ -21,6 +22,9 @@ extern "C" void matter_post_event(matter_event_t event) {
 }
 
 static void on_pase_complete(CHIP_ERROR err) {
+    if (err != CHIP_NO_ERROR) {
+        matter_commission_cancel_timeout();
+    }
     if (!s_event_cb) return;
     matter_event_t ev = {};
     ev.type = (err == CHIP_NO_ERROR) ? MATTER_EVENT_PASE_SUCCESS : MATTER_EVENT_PASE_FAILED;
@@ -28,6 +32,7 @@ static void on_pase_complete(CHIP_ERROR err) {
 }
 
 static void on_commissioning_success(chip::ScopedNodeId peer_id) {
+    matter_commission_cancel_timeout();
     if (!s_event_cb) return;
     matter_event_t ev = {};
     ev.type = MATTER_EVENT_COMMISSION_SUCCESS;
@@ -41,6 +46,7 @@ static void on_commissioning_failure(
     chip::Controller::CommissioningStage stage,
     std::optional<chip::Credentials::AttestationVerificationResult> additional_err_info) {
     ESP_LOGE(TAG, "Commissioning failed: node_id=0x%llx", (unsigned long long)peer_id.GetNodeId());
+    matter_commission_cancel_timeout();
     if (!s_event_cb) return;
     matter_event_t ev = {};
     ev.type = MATTER_EVENT_COMMISSION_FAILED;
