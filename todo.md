@@ -16,7 +16,7 @@
 
 ## Border router
 
-- [ ] **Fetch active dataset from OTBR dynamically** — the Thread dataset is hardcoded as `DEFAULT_THREAD_DATASET` in `ui_screens.c:57`. Read the active dataset from the running OpenThread border router at commission time so it always matches the actual network.
+- [x] **Fetch active dataset from OTBR dynamically** — reads the active dataset from the running OpenThread border router via `otDatasetGetActiveTlvs` when opening the commission screen.
 - [ ] **Show Thread border router status in UI** — display whether the border router is initialized, the Thread network name, and the number of connected Thread devices.
 - [ ] **Handle border router init failure** — `esp_openthread_border_router_init()` return value is not checked (`matter_init.cpp:67`). Log and surface errors to the UI if the RCP is unresponsive or UART fails.
 

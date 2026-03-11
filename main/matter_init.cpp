@@ -9,9 +9,11 @@
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
 #include <esp_netif.h>
+#include <esp_openthread.h>
 #include <esp_openthread_border_router.h>
 #include <esp_openthread_lock.h>
 #include <esp_ot_config.h>
+#include <openthread/dataset.h>
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
 
@@ -149,4 +151,38 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         s_event_cb(ev);
     }
     return ESP_OK;
+}
+
+esp_err_t matter_get_thread_active_dataset_hex(
+    char *out, size_t out_len) {
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    otOperationalDatasetTlvs tlvs;
+
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    otError ot_err = otDatasetGetActiveTlvs(
+        esp_openthread_get_instance(), &tlvs);
+    esp_openthread_lock_release();
+
+    if (ot_err != OT_ERROR_NONE) {
+        ESP_LOGW(TAG, "No active Thread dataset (ot_err=%d)", ot_err);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    size_t hex_len = tlvs.mLength * 2 + 1;
+    if (out_len < hex_len) {
+        ESP_LOGE(TAG, "Dataset buffer too small: need %u, have %u",
+                 (unsigned)hex_len, (unsigned)out_len);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    for (size_t i = 0; i < tlvs.mLength; i++) {
+        snprintf(out + i * 2, 3, "%02x", tlvs.mTlvs[i]);
+    }
+    out[tlvs.mLength * 2] = '\0';
+    return ESP_OK;
+#else
+    (void)out;
+    (void)out_len;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }

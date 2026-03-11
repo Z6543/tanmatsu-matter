@@ -50,22 +50,6 @@ static lv_obj_t *detail_info_label = NULL;
 static lv_obj_t *detail_rename_ta = NULL;
 static uint64_t  detail_node_id = 0;
 
-// Default Thread operational dataset (hex TLV) for the Tanmatsu
-// ESP32-C6 OT RCP via Spinel.
-// Channel 15, PAN ID 0x1234, network "Tanmatsu", development keys.
-// Replace with your OTBR's active dataset for production use.
-#define DEFAULT_THREAD_DATASET \
-    "0e080000000000010000" /* Active Timestamp = 1 */ \
-    "000300000f"           /* Channel 15 */ \
-    "3506000407fff800"     /* Channel Mask (11-26) */ \
-    "0208dead00beef00cafe" /* Extended PAN ID */ \
-    "0708fd000db800a00000" /* Mesh Local Prefix */ \
-    "0510" "00112233445566778899aabbccddeeff" /* Network Key */ \
-    "030854616e6d61747375" /* Network Name "Tanmatsu" */ \
-    "01021234"             /* PAN ID 0x1234 */ \
-    "0410" "3aa55f91ca47d1e4e71a08cb35e91591" /* PSKc */ \
-    "0c0402a0f7f8"         /* Security Policy */
-
 // Commissioning state
 static uint64_t s_pending_node_id = 0;
 static char     s_pending_name[MATTER_DEVICE_NAME_LEN] = {};
@@ -162,7 +146,15 @@ static void btn_add_cb(lv_event_t *e) {
     if (commission_code_ta) lv_textarea_set_text(commission_code_ta, "");
     if (commission_disc_ta) lv_textarea_set_text(commission_disc_ta, "");
     if (commission_hints_ta) lv_textarea_set_text(commission_hints_ta, "");
-    if (commission_thread_ta) lv_textarea_set_text(commission_thread_ta, DEFAULT_THREAD_DATASET);
+    if (commission_thread_ta) {
+        char dataset_hex[509];
+        if (matter_get_thread_active_dataset_hex(
+                dataset_hex, sizeof(dataset_hex)) == ESP_OK) {
+            lv_textarea_set_text(commission_thread_ta, dataset_hex);
+        } else {
+            lv_textarea_set_text(commission_thread_ta, "");
+        }
+    }
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
 }
@@ -672,9 +664,8 @@ static void create_commission_screen(void) {
 
     commission_thread_ta = lv_textarea_create(scr_commission);
     lv_textarea_set_one_line(commission_thread_ta, true);
-    lv_textarea_set_text(commission_thread_ta, DEFAULT_THREAD_DATASET);
     lv_textarea_set_placeholder_text(commission_thread_ta,
-        "Thread dataset hex TLV from OTBR");
+        "Auto-filled from border router");
     lv_obj_set_width(commission_thread_ta, LV_PCT(100));
     lv_obj_add_flag(commission_thread_ta, LV_OBJ_FLAG_HIDDEN);
     apply_focus_style(commission_thread_ta);

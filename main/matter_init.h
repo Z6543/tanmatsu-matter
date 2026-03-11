@@ -27,6 +27,17 @@ typedef void (*matter_event_cb_t)(matter_event_t event);
 
 esp_err_t matter_init(matter_event_cb_t cb);
 
+/**
+ * Get the active Thread operational dataset as a hex TLV string.
+ *
+ * @param out     Buffer to write the hex string into (null-terminated).
+ * @param out_len Size of the output buffer. Must be at least 509 bytes
+ *                (254 TLV bytes * 2 hex chars + null terminator).
+ * @return ESP_OK on success, ESP_ERR_NOT_FOUND if no active dataset,
+ *         ESP_ERR_INVALID_SIZE if the buffer is too small.
+ */
+esp_err_t matter_get_thread_active_dataset_hex(char *out, size_t out_len);
+
 #ifdef __cplusplus
 }
 #endif
