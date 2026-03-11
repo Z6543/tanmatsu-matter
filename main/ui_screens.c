@@ -228,14 +228,6 @@ static void btn_start_commission_cb(lv_event_t *e) {
         return;
     }
 
-    if (commission_method == 5) {
-        const char *thread_str = lv_textarea_get_text(commission_thread_ta);
-        if (!thread_str || thread_str[0] == '\0') {
-            lv_label_set_text(commission_status_label, "Enter Thread dataset!");
-            return;
-        }
-    }
-
     if (commission_method == 1 || commission_method == 4 ||
         commission_method == 5) {
         const char *disc_str = lv_textarea_get_text(commission_disc_ta);
@@ -302,7 +294,12 @@ static void btn_start_commission_cb(lv_event_t *e) {
     }
 
     if (err != ESP_OK) {
-        lv_label_set_text(commission_status_label, "Failed to start pairing");
+        const char *msg = "Failed to start pairing";
+        if (commission_method == 5 && err == ESP_ERR_NOT_FOUND) {
+            msg = "No Thread dataset: border router has no active "
+                  "network. Enter a dataset manually.";
+        }
+        lv_label_set_text(commission_status_label, msg);
         lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
     } else {
         lv_label_set_text(commission_status_label, "Establishing PASE...");
@@ -659,7 +656,7 @@ static void create_commission_screen(void) {
     // Thread dataset (only visible for method 5: Thread)
     commission_thread_label = lv_label_create(scr_commission);
     lv_label_set_text(commission_thread_label,
-        "Thread Dataset (hex TLV):");
+        "Thread Dataset (optional, auto-fetched from BR):");
     lv_obj_add_flag(commission_thread_label, LV_OBJ_FLAG_HIDDEN);
 
     commission_thread_ta = lv_textarea_create(scr_commission);

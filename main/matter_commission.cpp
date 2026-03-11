@@ -337,11 +337,32 @@ esp_err_t matter_commission_ble_thread(
              (unsigned long)pincode, discriminator);
 
     uint8_t dataset_buf[chip::Thread::kSizeOperationalDataset];
-    int dataset_len = hex_to_bytes(
-        dataset_hex, dataset_buf, sizeof(dataset_buf));
-    if (dataset_len <= 0) {
-        ESP_LOGE(TAG, "Invalid Thread dataset hex string");
-        return ESP_ERR_INVALID_ARG;
+    int dataset_len = 0;
+
+    bool have_explicit = dataset_hex && dataset_hex[0] != '\0';
+    if (have_explicit) {
+        dataset_len = hex_to_bytes(
+            dataset_hex, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Invalid Thread dataset hex string");
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else {
+        char hex_buf[509];
+        esp_err_t err = matter_get_thread_active_dataset_hex(
+            hex_buf, sizeof(hex_buf));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "No Thread dataset provided and border "
+                     "router has no active dataset");
+            return ESP_ERR_NOT_FOUND;
+        }
+        dataset_len = hex_to_bytes(
+            hex_buf, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Failed to decode border router dataset");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Using active dataset from border router");
     }
 
     chip::Thread::OperationalDataset dataset;
