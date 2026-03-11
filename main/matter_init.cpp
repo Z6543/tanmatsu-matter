@@ -67,6 +67,16 @@ static void init_thread_border_router() {
         esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
     esp_openthread_lock_acquire(portMAX_DELAY);
     esp_openthread_border_router_init();
+
+    otInstance *instance = esp_openthread_get_instance();
+    if (!otDatasetIsCommissioned(instance)) {
+        ESP_LOGI(TAG, "No active Thread dataset, creating from "
+                 "sdkconfig defaults");
+        esp_openthread_auto_start(NULL);
+    } else {
+        ESP_LOGI(TAG, "Thread dataset already commissioned");
+    }
+
     esp_openthread_lock_release();
     s_thread_br_init = true;
 }
