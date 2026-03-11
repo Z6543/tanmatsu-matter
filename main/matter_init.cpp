@@ -8,6 +8,7 @@
 #include <platform/PlatformManager.h>
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+#include <esp_netif.h>
 #include <esp_openthread_border_router.h>
 #include <esp_openthread_lock.h>
 #include <esp_ot_config.h>
@@ -54,6 +55,21 @@ static void on_commissioning_failure(
     s_event_cb(ev);
 }
 
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+static bool s_thread_br_init = false;
+
+static void init_thread_border_router() {
+    if (s_thread_br_init) return;
+    ESP_LOGI(TAG, "Initializing Thread border router");
+    esp_openthread_set_backbone_netif(
+        esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+    esp_openthread_lock_acquire(portMAX_DELAY);
+    esp_openthread_border_router_init();
+    esp_openthread_lock_release();
+    s_thread_br_init = true;
+}
+#endif
+
 static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr_t arg) {
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::PublicEventTypes::kInterfaceIpAddressChanged:
@@ -63,16 +79,7 @@ static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr
     case chip::DeviceLayer::DeviceEventType::kESPSystemEvent:
         if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
             event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP) {
-            static bool s_thread_br_init = false;
-            if (!s_thread_br_init) {
-                ESP_LOGI(TAG, "WiFi got IP, initializing Thread BR");
-                esp_openthread_set_backbone_netif(
-                    esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
-                esp_openthread_lock_acquire(portMAX_DELAY);
-                esp_openthread_border_router_init();
-                esp_openthread_lock_release();
-                s_thread_br_init = true;
-            }
+            init_thread_border_router();
         }
         break;
 #endif
@@ -100,6 +107,20 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         return err;
     }
     ESP_LOGI(TAG, "Matter stack started");
+
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    // WiFi may already have an IP if connected before Matter started.
+    // The IP_EVENT_STA_GOT_IP event won't be re-delivered, so check now.
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta) {
+        esp_netif_ip_info_t ip_info;
+        if (esp_netif_get_ip_info(sta, &ip_info) == ESP_OK &&
+            ip_info.ip.addr != 0) {
+            ESP_LOGI(TAG, "WiFi already has IP, initializing BR now");
+            init_thread_border_router();
+        }
+    }
+#endif
 
     {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
