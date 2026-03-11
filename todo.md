@@ -1,0 +1,36 @@
+# TODO
+
+## Reliability
+
+- [ ] **Handle subscription failures** — `matter_device_subscribe_onoff` leaks the `subscribe_command` (allocated with `new` at `matter_device_control.cpp:80`) and never detects subscription loss. Track active subscriptions, handle the failure callback (4th arg is currently `nullptr`), and re-subscribe on disconnect.
+- [ ] **Mark devices unreachable on subscription drop** — `reachable` is set to `true` on report/subscribe-done but never set to `false`. Add a subscription failure/termination callback that sets `reachable = false` and updates the UI.
+- [ ] **Re-subscribe after WiFi reconnect** — if WiFi drops and reconnects, all CASE sessions are lost. Detect WiFi reconnection and call `matter_device_subscribe_all()` again.
+- [ ] **Validate commissioning inputs** — `atol`/`atoi` on text area input (`ui_screens.c:268,274,276`) silently returns 0 on non-numeric input. Validate PIN code range (1–99999998, excluding invalid codes) and discriminator range (0–4095) before starting commissioning.
+- [ ] **Handle concurrent commissioning and device control** — nothing prevents the user from toggling a device while a commission is in progress. The chip stack lock serializes calls, but the UI doesn't reflect that operations may be delayed.
+
+## Device support
+
+- [ ] **Support multiple endpoints** — `device_manager_add` hardcodes endpoint 1 (`ui_screens.c:127`). After commissioning, read the device's descriptor cluster to discover actual endpoints and device types.
+- [ ] **Support device types beyond on/off** — currently only subscribes to OnOff cluster (0x0006). Add support for Level Control (dimming), Color Control, Temperature Measurement, and other common clusters.
+- [ ] **Read device type during commissioning** — after successful commissioning, read the Basic Information cluster (vendor name, product name) and use it as the default device name instead of "Device N".
+
+## Border router
+
+- [ ] **Fetch active dataset from OTBR dynamically** — the Thread dataset is hardcoded as `DEFAULT_THREAD_DATASET` in `ui_screens.c:57`. Read the active dataset from the running OpenThread border router at commission time so it always matches the actual network.
+- [ ] **Show Thread border router status in UI** — display whether the border router is initialized, the Thread network name, and the number of connected Thread devices.
+- [ ] **Handle border router init failure** — `esp_openthread_border_router_init()` return value is not checked (`matter_init.cpp:67`). Log and surface errors to the UI if the RCP is unresponsive or UART fails.
+
+## UI / UX
+
+- [ ] **Add confirmation dialog for destructive actions** — "Force Remove" (`card_key_cb` on F2) and "Unpair Device" immediately delete without confirmation. Add a confirmation prompt.
+- [ ] **Show commissioning progress steps** — the status label only shows "PASE established..." and then success/fail. Show intermediate steps (attestation, network setup, operational discovery) to help diagnose failures.
+- [ ] **Persist and restore last commissioning method** — switching to the commission screen always resets to method 0 (PIN). Remember the user's last-used method.
+- [ ] **Improve device card layout for many devices** — with `MATTER_DEVICE_MAX=5` and fixed 140x80 cards, the dashboard works. If the limit increases, add scrolling or a list view.
+- [ ] **Show reachable/unreachable state on dashboard cards** — the `reachable` field exists in `matter_device_t` but the dashboard only shows on/off color. Dim or badge unreachable devices.
+
+## Code quality
+
+- [ ] **Increase `MATTER_DEVICE_MAX`** — the limit of 5 devices is low for a home with many smart devices. Evaluate memory impact and increase, or switch to dynamic allocation.
+- [ ] **Persist `reachable` and `on_off` state correctly** — `device_manager_save` writes the full `matter_device_t` struct including runtime state (`reachable`, `on_off`) as a raw blob. This makes NVS layout fragile (adding a struct field breaks existing data). Serialize only persistent fields, or add a version tag.
+- [ ] **Thread-safety for device manager** — `s_devices` and `s_device_count` are accessed from both the main task (UI) and the Matter task (callbacks) without synchronization. Add a mutex or confine all access to a single task.
+- [ ] **Clean up stale NVS keys on device removal** — `device_manager_remove` compacts the array and re-saves, but if `device_manager_save` fails partway through, NVS can have inconsistent state. Write the new count last, after all blobs succeed.
