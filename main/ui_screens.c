@@ -8,6 +8,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "lvgl.h"
+#include "nvs.h"
+
+static const char *TAG = "ui";
 
 // Event queue for Matter -> UI communication
 static QueueHandle_t s_ui_event_queue = NULL;
@@ -54,8 +57,19 @@ static uint64_t  detail_node_id = 0;
 static uint64_t s_pending_node_id = 0;
 static char     s_pending_name[MATTER_DEVICE_NAME_LEN] = {};
 
+// Confirmation dialog state
+static lv_obj_t *confirm_dialog = NULL;
+static uint64_t  confirm_node_id = 0;
+typedef enum { CONFIRM_FORCE_REMOVE, CONFIRM_UNPAIR } confirm_action_t;
+static confirm_action_t confirm_action;
+static lv_group_t *confirm_prev_group = NULL;
+static lv_group_t *confirm_dlg_group = NULL;
+
 // LVGL timer for polling event queue
 static lv_timer_t *s_event_timer = NULL;
+
+// NVS key for persisted commission method
+static const char *NVS_UI_NS = "matter_ui";
 
 // Forward declarations
 static void create_dashboard_screen(void);
@@ -63,6 +77,8 @@ static void create_commission_screen(void);
 static void create_detail_screen(void);
 static void refresh_dashboard(void);
 static void show_detail_for_device(uint64_t node_id);
+static void apply_focus_style(lv_obj_t *obj);
+static void activate_group(lv_group_t *grp);
 
 // ---- Group management ----
 static void activate_group(lv_group_t *grp) {
@@ -81,6 +97,128 @@ static void switch_to_screen(lv_obj_t *scr, lv_group_t *grp) {
     lv_screen_load(scr);
 }
 
+// ---- NVS helpers for UI preferences ----
+static void save_commission_method(int method) {
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_UI_NS, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u8(nvs, "comm_method", (uint8_t)method);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
+static int load_commission_method(void) {
+    nvs_handle_t nvs;
+    uint8_t method = 0;
+    if (nvs_open(NVS_UI_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "comm_method", &method);
+        nvs_close(nvs);
+    }
+    if (method >= NUM_COMMISSION_METHODS) method = 0;
+    return (int)method;
+}
+
+// ---- Confirmation dialog ----
+static void dismiss_confirm_dialog(void) {
+    if (!confirm_dialog) return;
+    lv_obj_delete(confirm_dialog);
+    confirm_dialog = NULL;
+    if (confirm_dlg_group) {
+        lv_group_delete(confirm_dlg_group);
+        confirm_dlg_group = NULL;
+    }
+    if (confirm_prev_group) activate_group(confirm_prev_group);
+    confirm_prev_group = NULL;
+}
+
+static void confirm_yes_cb(lv_event_t *e) {
+    (void)e;
+    uint64_t node_id = confirm_node_id;
+    confirm_action_t action = confirm_action;
+
+    dismiss_confirm_dialog();
+
+    if (action == CONFIRM_FORCE_REMOVE) {
+        device_manager_remove(node_id);
+        refresh_dashboard();
+    } else if (action == CONFIRM_UNPAIR) {
+        matter_device_unpair(node_id);
+        device_manager_remove(node_id);
+        refresh_dashboard();
+        switch_to_screen(scr_dashboard, grp_dashboard);
+    }
+}
+
+static void confirm_no_cb(lv_event_t *e) {
+    (void)e;
+    dismiss_confirm_dialog();
+}
+
+static void show_confirm_dialog(
+    const char *message, uint64_t node_id,
+    confirm_action_t action) {
+    if (confirm_dialog) return;
+
+    confirm_node_id = node_id;
+    confirm_action = action;
+    confirm_prev_group = lv_group_get_default();
+
+    confirm_dialog = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(confirm_dialog, 300, 160);
+    lv_obj_center(confirm_dialog);
+    lv_obj_set_flex_flow(confirm_dialog, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(confirm_dialog,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(confirm_dialog, 16, 0);
+    lv_obj_set_style_pad_gap(confirm_dialog, 12, 0);
+    lv_obj_set_style_bg_color(confirm_dialog,
+        lv_color_hex(0x2A2A2A), 0);
+    lv_obj_set_style_border_color(confirm_dialog,
+        lv_color_hex(0xFF5252), 0);
+    lv_obj_set_style_border_width(confirm_dialog, 2, 0);
+
+    lv_obj_t *msg = lv_label_create(confirm_dialog);
+    lv_label_set_text(msg, message);
+    lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(msg, LV_PCT(100));
+    lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *btn_row = lv_obj_create(confirm_dialog);
+    lv_obj_set_size(btn_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(btn_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_row,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_gap(btn_row, 16, 0);
+    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(btn_row, 0, 0);
+    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *no_btn = lv_button_create(btn_row);
+    lv_obj_t *no_lbl = lv_label_create(no_btn);
+    lv_label_set_text(no_lbl, "Cancel");
+    lv_obj_add_event_cb(no_btn, confirm_no_cb,
+        LV_EVENT_CLICKED, NULL);
+    apply_focus_style(no_btn);
+
+    lv_obj_t *yes_btn = lv_button_create(btn_row);
+    lv_obj_set_style_bg_color(yes_btn,
+        lv_color_hex(0xC62828), 0);
+    lv_obj_t *yes_lbl = lv_label_create(yes_btn);
+    lv_label_set_text(yes_lbl, "Confirm");
+    lv_obj_add_event_cb(yes_btn, confirm_yes_cb,
+        LV_EVENT_CLICKED, NULL);
+    apply_focus_style(yes_btn);
+
+    // Temporary group so keyboard navigates the dialog
+    confirm_dlg_group = lv_group_create();
+    lv_group_add_obj(confirm_dlg_group, no_btn);
+    lv_group_add_obj(confirm_dlg_group, yes_btn);
+    activate_group(confirm_dlg_group);
+    lv_group_focus_obj(no_btn);
+}
+
 // ---- Event queue timer callback ----
 static void event_timer_cb(lv_timer_t *timer) {
     (void)timer;
@@ -94,7 +232,10 @@ static void event_timer_cb(lv_timer_t *timer) {
             break;
         case MATTER_EVENT_PASE_SUCCESS:
             if (commission_status_label) {
-                lv_label_set_text(commission_status_label, "PASE established...");
+                lv_label_set_text(commission_status_label,
+                    "PASE established.\n"
+                    "Commissioning: attestation, certs,\n"
+                    "network setup, operational discovery...");
             }
             break;
         case MATTER_EVENT_PASE_FAILED:
@@ -210,7 +351,16 @@ static void method_radio_cb(lv_event_t *e) {
             lv_obj_clear_state(commission_method_radios[i], LV_STATE_CHECKED);
         }
     }
+    save_commission_method(commission_method);
     update_commission_fields();
+
+    // Focus the first visible text entry for the selected method
+    bool need_disc = (commission_method == 1 ||
+                      commission_method == 4 ||
+                      commission_method == 5);
+    lv_obj_t *first_ta = need_disc ? commission_disc_ta
+                                   : commission_code_ta;
+    lv_group_focus_obj(first_ta);
 }
 
 static void btn_start_commission_cb(lv_event_t *e) {
@@ -321,8 +471,13 @@ static void card_key_cb(lv_event_t *e) {
     if (key == LV_KEY_HOME) {  // F1: details
         show_detail_for_device(node_id);
     } else if (key == LV_KEY_END) {  // F2: force remove
-        device_manager_remove(node_id);
-        refresh_dashboard();
+        const matter_device_t *dev = device_manager_find(node_id);
+        const char *name = dev ? dev->name : "this device";
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+            "Force remove \"%s\"?\nThis won't unpair from the device.",
+            name);
+        show_confirm_dialog(msg, node_id, CONFIRM_FORCE_REMOVE);
     }
 }
 
@@ -357,10 +512,12 @@ static void btn_rename_cb(lv_event_t *e) {
 
 static void btn_unpair_cb(lv_event_t *e) {
     (void)e;
-    matter_device_unpair(detail_node_id);
-    device_manager_remove(detail_node_id);
-    refresh_dashboard();
-    switch_to_screen(scr_dashboard, grp_dashboard);
+    const matter_device_t *dev = device_manager_find(detail_node_id);
+    const char *name = dev ? dev->name : "this device";
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+        "Unpair \"%s\"?\nThis will remove the device.", name);
+    show_confirm_dialog(msg, detail_node_id, CONFIRM_UNPAIR);
 }
 
 static void btn_back_detail_cb(lv_event_t *e) {
@@ -548,7 +705,11 @@ static void refresh_dashboard(void) {
         lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_set_style_pad_all(card, 6, 0);
 
-        if (dev->on_off) {
+        if (!dev->reachable) {
+            lv_obj_set_style_bg_color(card, lv_color_hex(0x303030), 0);
+            lv_obj_set_style_text_color(card, lv_color_hex(0x777777), 0);
+            lv_obj_set_style_bg_opa(card, LV_OPA_70, 0);
+        } else if (dev->on_off) {
             lv_obj_set_style_bg_color(card, lv_color_hex(0x2E7D32), 0);
             lv_obj_set_style_text_color(card, lv_color_hex(0xFFFFFF), 0);
         } else {
@@ -563,7 +724,11 @@ static void refresh_dashboard(void) {
         lv_obj_set_style_text_align(name_lbl, LV_TEXT_ALIGN_CENTER, 0);
 
         lv_obj_t *state_lbl = lv_label_create(card);
-        lv_label_set_text(state_lbl, dev->on_off ? "ON" : "OFF");
+        if (!dev->reachable) {
+            lv_label_set_text(state_lbl, "Unreachable");
+        } else {
+            lv_label_set_text(state_lbl, dev->on_off ? "ON" : "OFF");
+        }
 
         void *user_data = (void *)(uintptr_t)dev->node_id;
         lv_obj_add_event_cb(card, card_click_cb, LV_EVENT_SHORT_CLICKED, user_data);
@@ -622,8 +787,9 @@ static void create_commission_screen(void) {
         apply_focus_style(commission_method_radios[i]);
         lv_group_add_obj(grp_commission, commission_method_radios[i]);
     }
-    lv_obj_add_state(commission_method_radios[0], LV_STATE_CHECKED);
-    commission_method = 0;
+    commission_method = load_commission_method();
+    lv_obj_add_state(commission_method_radios[commission_method],
+        LV_STATE_CHECKED);
 
     // Discriminator input (only visible for method 1)
     commission_disc_label = lv_label_create(scr_commission);
@@ -711,6 +877,9 @@ static void create_commission_screen(void) {
     hint_add_text(comm_hints, "Enter: Confirm");
     hint_add_icon(comm_hints, &img_dsc_esc);
     hint_add_text(comm_hints, "Back");
+
+    // Apply persisted method's field visibility
+    update_commission_fields();
 }
 
 static void create_detail_screen(void) {
@@ -807,7 +976,16 @@ static void show_detail_for_device(uint64_t node_id) {
 
     detail_node_id = node_id;
     lv_label_set_text(detail_name_label, dev->name);
-    lv_label_set_text(detail_state_label, dev->on_off ? "State: ON" : "State: OFF");
+    if (!dev->reachable) {
+        lv_label_set_text(detail_state_label, "State: Unreachable");
+        lv_obj_set_style_text_color(detail_state_label,
+            lv_color_hex(0x777777), 0);
+    } else {
+        lv_label_set_text(detail_state_label,
+            dev->on_off ? "State: ON" : "State: OFF");
+        lv_obj_set_style_text_color(detail_state_label,
+            lv_color_hex(0xFFFFFF), 0);
+    }
 
     char info[128];
     snprintf(info, sizeof(info), "Node ID: 0x%llX\nEndpoint: %u",
@@ -845,7 +1023,17 @@ void ui_update_device_state(uint64_t node_id, bool on_off) {
 
     // Update detail screen if showing this device
     if (detail_node_id == node_id && lv_screen_active() == scr_detail) {
-        lv_label_set_text(detail_state_label, on_off ? "State: ON" : "State: OFF");
+        const matter_device_t *dev = device_manager_find(node_id);
+        if (dev && !dev->reachable) {
+            lv_label_set_text(detail_state_label, "State: Unreachable");
+            lv_obj_set_style_text_color(detail_state_label,
+                lv_color_hex(0x777777), 0);
+        } else {
+            lv_label_set_text(detail_state_label,
+                on_off ? "State: ON" : "State: OFF");
+            lv_obj_set_style_text_color(detail_state_label,
+                lv_color_hex(0xFFFFFF), 0);
+        }
     }
 }
 
