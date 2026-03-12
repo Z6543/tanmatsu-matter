@@ -62,6 +62,11 @@ CONFIG_ENABLE_CHIP_SHELL=n
 # C6 LP_UART TX (net E8) → P4 GPIO54, C6 LP_UART RX (net E10) ← P4 GPIO53
 CONFIG_OPENTHREAD_ENABLED=y
 CONFIG_OPENTHREAD_BORDER_ROUTER=y
+# Required: the precompiled libopenthread_br.a is built with bridge
+# support, which adds an extra client_data entry to lwIP's struct netif.
+# Without this, netif field offsets mismatch and border routing fails
+# with "Failed to get LL address, error: Invalid If index".
+CONFIG_ESP_NETIF_BRIDGE_EN=y
 CONFIG_OPENTHREAD_LOG_LEVEL_DYNAMIC=n
 CONFIG_OPENTHREAD_LOG_LEVEL_NOTE=y
 CONFIG_OPENTHREAD_SRP_CLIENT=n

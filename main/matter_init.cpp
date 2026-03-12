@@ -13,9 +13,12 @@
 #include <esp_openthread_border_router.h>
 #include <esp_openthread_lock.h>
 #include <esp_ot_config.h>
+#include <mdns.h>
 #include <openthread/dataset.h>
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
+
+#include <lib/dnssd/Advertiser.h>
 
 static const char *TAG = "matter_init";
 static matter_event_cb_t s_event_cb = nullptr;
@@ -63,8 +66,13 @@ static bool s_thread_br_init = false;
 static void init_thread_border_router() {
     if (s_thread_br_init) return;
     ESP_LOGI(TAG, "Initializing Thread border router");
-    esp_openthread_set_backbone_netif(
-        esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"));
+
+    // mDNS must be initialized before the border router so the SRP
+    // server can forward Thread device registrations to mDNS.
+    // mdns_init() is idempotent — safe even if Matter inits it later.
+    ESP_ERROR_CHECK(mdns_init());
+    ESP_ERROR_CHECK(mdns_hostname_set("tanmatsu-br"));
+
     esp_openthread_lock_acquire(portMAX_DELAY);
     esp_openthread_border_router_init();
 
@@ -104,6 +112,18 @@ esp_err_t matter_init(matter_event_cb_t cb) {
     s_event_cb = cb;
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+    // Backbone netif must be set before esp_openthread_init()
+    // (called inside esp_matter::start). The WiFi STA netif is
+    // already created by wifi_connection_init_stack() in main.
+    esp_netif_t *backbone = esp_netif_get_handle_from_ifkey(
+        "WIFI_STA_DEF");
+    if (backbone) {
+        esp_openthread_set_backbone_netif(backbone);
+    } else {
+        ESP_LOGW(TAG, "WiFi STA netif not found, border router "
+                 "may not work");
+    }
+
     esp_openthread_platform_config_t ot_config = {
         .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
         .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
@@ -119,6 +139,27 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         return err;
     }
     ESP_LOGI(TAG, "Matter stack started");
+
+    // Initialize the CHIP DNS-SD platform before anything else that
+    // needs mDNS (border router, commissioner).  In controller-only
+    // mode the Matter stack doesn't call DnssdServer::StartServer(),
+    // so the platform resolver stays uninitialised.  Force it here.
+    {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        auto &advertiser = chip::Dnssd::ServiceAdvertiser::Instance();
+        if (!advertiser.IsInitialized()) {
+            // Shutdown first to clear any stuck kInitializing state,
+            // then Init to go kUninitialized → kInitialized cleanly.
+            advertiser.Shutdown();
+            auto chip_err = advertiser.Init(
+                chip::DeviceLayer::UDPEndPointManager());
+            if (chip_err != CHIP_NO_ERROR) {
+                ESP_LOGE(TAG, "DNSSD init failed");
+            } else {
+                ESP_LOGI(TAG, "DNSSD platform initialized");
+            }
+        }
+    }
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
     // WiFi may already have an IP if connected before Matter started.
