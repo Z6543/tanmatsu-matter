@@ -4,7 +4,14 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://badg
 
 ## Features
 
-- Commission Matter devices via Setup PIN Code (on-network) or QR Code payload
+- Commission Matter devices via multiple methods:
+  - Setup PIN Code (on-network)
+  - Discriminator + Passcode
+  - Manual Pairing Code
+  - QR Code payload
+  - BLE + WiFi (discover over BLE, provision WiFi credentials)
+  - BLE + Thread (discover over BLE, provision Thread network credentials)
+- Thread Border Router using the ESP32-C6 IEEE 802.15.4 radio as an OpenThread RCP
 - Dashboard with device cards showing on/off state
 - Toggle, turn on/off, rename, and unpair commissioned devices
 - Keyboard/encoder navigation with visual focus indicators
@@ -13,11 +20,13 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://badg
 ## Hardware
 
 - **Main SoC**: ESP32-P4 (with PSRAM, 16MB flash)
-- **Radio co-processor**: ESP32-C6 via ESP-Hosted (SDIO transport)
+- **Radio co-processor**: ESP32-C6 via ESP-Hosted (SDIO transport for WiFi/BLE, UART for Thread RCP)
 - **Display**: DSI LCD panel via LVGL
 - **Input**: Keypad/encoder (navigated via LVGL input groups)
 
-WiFi and BLE are provided by the ESP32-C6 co-processor. The WiFi stack is managed by the tanmatsu wifi-manager component, not by the CHIP/Matter stack.
+WiFi and BLE are provided by the ESP32-C6 co-processor over SDIO. The WiFi stack is managed by the tanmatsu wifi-manager component, not by the CHIP/Matter stack.
+
+The ESP32-C6 also provides an IEEE 802.15.4 radio (OpenThread RCP) over UART, enabling this device to act as a Thread Border Router. Thread and WiFi operate simultaneously with RF coexistence handled by the C6.
 
 ## Project Structure
 
@@ -27,10 +36,11 @@ main/
   ui_screens.c/h            - LVGL UI (dashboard, commission, detail screens)
   bsp_lvgl.c/h              - LVGL display and input driver setup
   matter_init.cpp/h         - Matter stack and commissioner initialization
-  matter_commission.cpp/h   - Commissioning functions (PIN code, QR code)
+  matter_commission.cpp/h   - Commissioning (PIN, QR, BLE+WiFi, BLE+Thread)
   matter_device_control.cpp/h - Device control (on/off/toggle, subscriptions)
   device_manager.c/h        - Device persistence (NVS storage)
   matter_project_config.h   - CHIP project configuration overrides
+  esp_ot_config.h           - OpenThread RCP UART pin configuration
 sdkconfigs/
   general                   - Shared sdkconfig defaults (all targets)
   tanmatsu                  - Tanmatsu-specific sdkconfig defaults
@@ -61,6 +71,20 @@ git clone --recursive https://github.com/nicola/esp-matter.git
 ```
 
 Follow the [esp-matter setup guide](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/developing.html) to ensure all dependencies are installed.
+
+### tanmatsu-radio (Thread support)
+
+Thread commissioning requires the ESP32-C6 co-processor to run the [tanmatsu-radio](https://github.com/badgeteam/tanmatsu-radio) firmware, which provides an OpenThread RCP over UART alongside WiFi/BLE over SDIO.
+
+Flash the radio firmware to the ESP32-C6 before using Thread features:
+
+```bash
+cd ../tanmatsu-radio
+make build
+make flash
+```
+
+The RCP communicates Spinel HDLC frames over UART1 at 460800 baud. The UART pins are directly wired between the P4 and C6 (P4 GPIO54 ← C6 TX, P4 GPIO53 → C6 RX), so no extra wiring is needed.
 
 ## Environment Setup
 
@@ -141,12 +165,17 @@ UART console output is enabled by default (`CONFIG_ESP_CONSOLE_UART_DEFAULT=y`).
 1. The app connects to WiFi automatically on boot using stored credentials (managed by the tanmatsu wifi-manager)
 2. The Matter commissioner initializes and the dashboard shows "Commissioner ready"
 3. Press **+ Add** to commission a new device:
-   - Select **Setup PIN Code** for on-network commissioning with a numeric PIN
-   - Select **QR Code** for commissioning via a Matter QR code payload string (e.g. `MT:...`)
+   - **PIN** — on-network commissioning with a numeric setup PIN code
+   - **Disc+Pass** — discriminator + passcode with optional discovery hints
+   - **Manual** — manual pairing code (11-digit numeric, auto-detects transport)
+   - **QR** — QR code payload string (e.g. `MT:...`, auto-detects transport)
+   - **BLE+WiFi** — discover device over BLE, provision the current WiFi network credentials
+   - **BLE+Thread** — discover device over BLE, provision Thread network credentials via the border router
    - Enter a device name and press **Start Commissioning**
 4. Commissioned devices appear as cards on the dashboard
-   - **Short press / Enter**: Toggle the device on/off
-   - **Long press**: Open the device detail screen (on/off controls, rename, unpair)
+   - **Enter**: Toggle the device on/off
+   - **F1**: Open device detail screen (on/off controls, rename, unpair)
+   - **F2**: Force remove device
 
 ## Key Configuration
 
@@ -156,9 +185,36 @@ Notable sdkconfig settings in `sdkconfigs/tanmatsu`:
 |---------|-------|---------|
 | `CONFIG_ENABLE_WIFI_STATION` | `n` | Prevents Matter from managing WiFi (handled by wifi-manager) |
 | `CONFIG_ESP_MATTER_ENABLE_MATTER_SERVER` | `n` | Controller-only mode (no Matter server endpoint) |
-| `CONFIG_ENABLE_ESP32_BLE_CONTROLLER` | `n` | BLE controller disabled (co-processor BLE not supported by Matter SDK) |
+| `CONFIG_ENABLE_ESP32_BLE_CONTROLLER` | `y` | Enable BLE controller for BLE commissioning |
 | `CONFIG_ESP_MATTER_COMMISSIONER_ENABLE` | `y` | Enable Matter commissioner functionality |
 | `CONFIG_CHIP_TASK_STACK_SIZE` | `15360` | Increased stack for Matter task |
+| `CONFIG_OPENTHREAD_ENABLED` | `y` | Enable OpenThread stack |
+| `CONFIG_OPENTHREAD_BORDER_ROUTER` | `y` | Enable Thread Border Router (ESP32-C6 RCP) |
+| `CONFIG_OPENTHREAD_RADIO_SPINEL_UART` | `y` | Spinel over UART to C6 RCP |
+| `CONFIG_OPENTHREAD_FTD` | `y` | Full Thread Device (required for border router) |
+
+## Thread Commissioning
+
+The Tanmatsu acts as a Thread Border Router, bridging between the WiFi/IP network and the Thread mesh network. This allows commissioning and controlling Thread-based Matter devices.
+
+### How it works
+
+1. The ESP32-C6 runs as an OpenThread RCP, providing the IEEE 802.15.4 radio
+2. The ESP32-P4 runs the OpenThread stack in Full Thread Device (FTD) mode with border routing enabled
+3. When WiFi connects, the border router initializes with the WiFi interface as the backbone
+4. Thread devices are discovered over BLE, then provisioned with Thread network credentials
+5. After joining the Thread mesh, devices register via SRP and become reachable through the border router
+
+### Commissioning a Thread device
+
+1. Ensure the ESP32-C6 is running the [tanmatsu-radio](https://github.com/badgeteam/tanmatsu-radio) firmware
+2. Ensure WiFi is connected (the border router needs a backbone interface)
+3. On the commission screen, select **BLE+Thread**
+4. Enter the device's passcode and discriminator
+5. The Thread dataset field is pre-filled with the default network configuration — modify it if your Thread network uses different settings
+6. Press **Start Commissioning**
+
+The default Thread network uses channel 15, PAN ID 0x1234, and network name "Tanmatsu" with development keys. For production use, replace the dataset with your network's active operational dataset.
 
 ## License
 

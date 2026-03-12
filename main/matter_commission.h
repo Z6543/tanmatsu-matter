@@ -25,11 +25,13 @@ esp_err_t matter_commission_setup_code(
 esp_err_t matter_commission_ble_wifi(
     uint64_t node_id, uint32_t pincode, uint16_t discriminator);
 
-esp_err_t matter_commission_setup_code_thread(
-    uint64_t node_id, const char *code,
+esp_err_t matter_commission_ble_thread(
+    uint64_t node_id, uint32_t pincode, uint16_t discriminator,
     const char *dataset_hex);
 
 esp_err_t matter_device_unpair(uint64_t node_id);
+
+void matter_commission_cancel_timeout(void);
 
 #ifdef __cplusplus
 }

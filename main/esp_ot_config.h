@@ -6,7 +6,7 @@
 #include "esp_openthread_types.h"
 
 // Tanmatsu ESP32-C6 RCP: Spinel HDLC over UART1
-// TX = GPIO16 (BSP_HOST_TX), RX = GPIO17 (BSP_HOST_RX)
+// C6 LP_UART TX (net E8) → P4 GPIO54, C6 LP_UART RX (net E10) ← P4 GPIO53
 #define ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG()              \
     {                                                      \
         .radio_mode = RADIO_MODE_UART_RCP,                 \
@@ -22,8 +22,8 @@
                     .rx_flow_ctrl_thresh = 0,              \
                     .source_clk = UART_SCLK_DEFAULT,       \
                 },                                         \
-            .rx_pin = GPIO_NUM_17,                         \
-            .tx_pin = GPIO_NUM_16,                         \
+            .rx_pin = GPIO_NUM_54,                         \
+            .tx_pin = GPIO_NUM_53,                         \
         },                                                 \
     }
 

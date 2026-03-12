@@ -6,6 +6,7 @@
 #include <esp_matter.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_pairing_command.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <controller/CommissioningDelegate.h>
 #include <credentials/attestation_verifier/DeviceAttestationDelegate.h>
@@ -16,6 +17,8 @@
 #include <lib/support/ThreadOperationalDataset.h>
 
 static const char *TAG = "matter_comm";
+
+#define COMMISSION_TIMEOUT_US (90ULL * 1000000ULL)
 
 extern "C" void matter_post_event(matter_event_t event);
 
@@ -139,6 +142,45 @@ static void inject_attestation_delegate() {
     comm->UpdateCommissioningParameters(params);
 }
 
+// --- Commission timeout ---
+
+static esp_timer_handle_t s_timeout_timer = nullptr;
+static uint64_t s_timeout_node_id = 0;
+
+static void commission_timeout_cb(void *arg) {
+    uint64_t node_id = s_timeout_node_id;
+    ESP_LOGW(TAG, "Commission timeout (90s) for node 0x%llx",
+             (unsigned long long)node_id);
+
+    {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        get_commissioner()->StopPairing(node_id);
+    }
+
+    matter_event_t ev = {};
+    ev.type = MATTER_EVENT_COMMISSION_TIMEOUT;
+    ev.node_id = node_id;
+    matter_post_event(ev);
+}
+
+static void start_commission_timeout(uint64_t node_id) {
+    if (!s_timeout_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = commission_timeout_cb;
+        args.name = "comm_timeout";
+        ESP_ERROR_CHECK(esp_timer_create(&args, &s_timeout_timer));
+    }
+    esp_timer_stop(s_timeout_timer);
+    s_timeout_node_id = node_id;
+    esp_timer_start_once(s_timeout_timer, COMMISSION_TIMEOUT_US);
+}
+
+void matter_commission_cancel_timeout(void) {
+    if (s_timeout_timer) {
+        esp_timer_stop(s_timeout_timer);
+    }
+}
+
 // --- Public API ---
 
 esp_err_t matter_commission_on_network(
@@ -147,8 +189,10 @@ esp_err_t matter_commission_on_network(
              (unsigned long long)node_id, (unsigned long)pincode);
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     inject_attestation_delegate();
-    return esp_matter::controller::pairing_on_network(
+    esp_err_t err = esp_matter::controller::pairing_on_network(
         node_id, pincode);
+    if (err == ESP_OK) start_commission_timeout(node_id);
+    return err;
 }
 
 esp_err_t matter_commission_disc_pass(
@@ -187,6 +231,7 @@ esp_err_t matter_commission_disc_pass(
     get_commissioner()->PairDevice(
         node_id, manual_code.c_str(), params,
         hints_to_discovery_type(discovery_hints));
+    start_commission_timeout(node_id);
     return ESP_OK;
 }
 
@@ -224,6 +269,7 @@ esp_err_t matter_commission_setup_code(
     ESP_RETURN_ON_ERROR(build_params(params, hints), TAG, "Params");
     get_commissioner()->PairDevice(
         node_id, code, params, hints_to_discovery_type(hints));
+    start_commission_timeout(node_id);
     return ESP_OK;
 }
 
@@ -257,6 +303,7 @@ esp_err_t matter_commission_ble_wifi(
         chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
     get_commissioner()->PairDevice(node_id, rendezvous, params);
+    start_commission_timeout(node_id);
     return ESP_OK;
 }
 
@@ -282,18 +329,40 @@ static int hex_to_bytes(
     return (int)byte_len;
 }
 
-esp_err_t matter_commission_setup_code_thread(
-    uint64_t node_id, const char *code,
+esp_err_t matter_commission_ble_thread(
+    uint64_t node_id, uint32_t pincode, uint16_t discriminator,
     const char *dataset_hex) {
-    ESP_LOGI(TAG, "Pairing setup code+Thread: node=0x%llx code=%s",
-             (unsigned long long)node_id, code);
+    ESP_LOGI(TAG, "Pairing BLE+Thread: node=0x%llx pin=%lu disc=%u",
+             (unsigned long long)node_id,
+             (unsigned long)pincode, discriminator);
 
     uint8_t dataset_buf[chip::Thread::kSizeOperationalDataset];
-    int dataset_len = hex_to_bytes(
-        dataset_hex, dataset_buf, sizeof(dataset_buf));
-    if (dataset_len <= 0) {
-        ESP_LOGE(TAG, "Invalid Thread dataset hex string");
-        return ESP_ERR_INVALID_ARG;
+    int dataset_len = 0;
+
+    bool have_explicit = dataset_hex && dataset_hex[0] != '\0';
+    if (have_explicit) {
+        dataset_len = hex_to_bytes(
+            dataset_hex, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Invalid Thread dataset hex string");
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else {
+        char hex_buf[509];
+        esp_err_t err = matter_get_thread_active_dataset_hex(
+            hex_buf, sizeof(hex_buf));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "No Thread dataset provided and border "
+                     "router has no active dataset");
+            return ESP_ERR_NOT_FOUND;
+        }
+        dataset_len = hex_to_bytes(
+            hex_buf, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Failed to decode border router dataset");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Using active dataset from border router");
     }
 
     chip::Thread::OperationalDataset dataset;
@@ -311,13 +380,19 @@ esp_err_t matter_commission_setup_code_thread(
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
+    chip::RendezvousParameters rendezvous =
+        chip::RendezvousParameters()
+            .SetSetupPINCode(pincode)
+            .SetDiscriminator(discriminator)
+            .SetPeerAddress(chip::Transport::PeerAddress::BLE());
+
     CommissioningParameters params;
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
     params.SetThreadOperationalDataset(
         chip::ByteSpan(dataset_buf, dataset_len));
 
-    get_commissioner()->PairDevice(
-        node_id, code, params, DiscoveryType::kAll);
+    get_commissioner()->PairDevice(node_id, rendezvous, params);
+    start_commission_timeout(node_id);
     return ESP_OK;
 }
 
