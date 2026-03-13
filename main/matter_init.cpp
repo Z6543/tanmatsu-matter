@@ -18,8 +18,6 @@
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
 
-#include <lib/dnssd/Advertiser.h>
-
 static const char *TAG = "matter_init";
 static matter_event_cb_t s_event_cb = nullptr;
 
@@ -139,27 +137,6 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         return err;
     }
     ESP_LOGI(TAG, "Matter stack started");
-
-    // Initialize the CHIP DNS-SD platform before anything else that
-    // needs mDNS (border router, commissioner).  In controller-only
-    // mode the Matter stack doesn't call DnssdServer::StartServer(),
-    // so the platform resolver stays uninitialised.  Force it here.
-    {
-        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-        auto &advertiser = chip::Dnssd::ServiceAdvertiser::Instance();
-        if (!advertiser.IsInitialized()) {
-            // Shutdown first to clear any stuck kInitializing state,
-            // then Init to go kUninitialized → kInitialized cleanly.
-            advertiser.Shutdown();
-            auto chip_err = advertiser.Init(
-                chip::DeviceLayer::UDPEndPointManager());
-            if (chip_err != CHIP_NO_ERROR) {
-                ESP_LOGE(TAG, "DNSSD init failed");
-            } else {
-                ESP_LOGI(TAG, "DNSSD platform initialized");
-            }
-        }
-    }
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
     // WiFi may already have an IP if connected before Matter started.

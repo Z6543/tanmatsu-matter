@@ -6,6 +6,7 @@
 #include "bsp_lvgl.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_event.h"
 #include "esp_wifi.h"
 #include "hal/lcd_types.h"
 #include "nvs_flash.h"
@@ -36,6 +37,13 @@ static void on_device_state_changed(uint64_t node_id, bool on_off) {
     lvgl_lock();
     ui_update_device_state(node_id, on_off);
     lvgl_unlock();
+}
+
+static void on_wifi_got_ip(
+    void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)id; (void)data;
+    ESP_LOGI(TAG, "WiFi reconnected, re-subscribing to all devices");
+    matter_device_subscribe_all();
 }
 
 void app_main(void) {
@@ -91,6 +99,11 @@ void app_main(void) {
 
     matter_device_set_state_cb(on_device_state_changed);
     matter_device_subscribe_all();
+
+    // Re-subscribe to all devices when WiFi reconnects (CASE sessions
+    // are lost on disconnect, so subscriptions must be re-established).
+    esp_event_handler_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_got_ip, NULL);
 
     ESP_LOGI(TAG, "Application ready");
 }

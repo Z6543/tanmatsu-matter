@@ -6,9 +6,9 @@
 
 ## Reliability
 
-- [ ] **Re-subscribe after WiFi reconnect** — if WiFi drops and reconnects, all CASE sessions are lost. Detect WiFi reconnection and call `matter_device_subscribe_all()` again.
-- [ ] **Validate commissioning inputs** — `atol`/`atoi` on text area input (`ui_screens.c:268,274,276`) silently returns 0 on non-numeric input. Validate PIN code range (1–99999998, excluding invalid codes) and discriminator range (0–4095) before starting commissioning.
-- [ ] **Handle concurrent commissioning and device control** — nothing prevents the user from toggling a device while a commission is in progress. The chip stack lock serializes calls, but the UI doesn't reflect that operations may be delayed.
+- [x] **Re-subscribe after WiFi reconnect** — registers `IP_EVENT_STA_GOT_IP` handler in `main.c` that calls `matter_device_subscribe_all()` on reconnect.
+- [x] **Validate commissioning inputs** — PIN code validated for range (1–99999998), digits-only, and Matter-spec invalid codes (all-same-digit, 12345678, 87654321). Discriminator validated for 0–4095 and digits-only.
+- [x] **Handle concurrent commissioning and device control** — `s_commissioning_active` flag in `ui_screens.c` blocks device toggle/on/off/card clicks while commissioning is in progress.
 
 ## Device support
 
