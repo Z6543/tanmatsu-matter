@@ -765,7 +765,9 @@ static void take_screenshot(void) {
 #endif
 
 static void global_key_cb(lv_event_t *e) {
-    uint32_t key = lv_event_get_key(e);
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    uint32_t key = lv_indev_get_key(indev);
 #if LV_USE_SNAPSHOT
     if (key == BSP_KEY_F3) {
         take_screenshot();
@@ -1195,7 +1197,7 @@ void ui_screens_init(void) {
     while ((indev = lv_indev_get_next(indev)) != NULL) {
         if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
             lv_indev_add_event_cb(indev, global_key_cb,
-                LV_EVENT_KEY, NULL);
+                LV_EVENT_PRESSED, NULL);
         }
     }
 
