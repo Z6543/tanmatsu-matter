@@ -6,6 +6,9 @@
 
 #define DEVKIT
 
+// Custom key codes for function keys not in lv_key_t
+#define BSP_KEY_F3  0xF3
+
 typedef struct {
     uint32_t   key;
     lv_state_t state;

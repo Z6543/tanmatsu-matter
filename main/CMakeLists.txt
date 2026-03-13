@@ -28,6 +28,7 @@ idf_component_register(
 		"icons/esc.png"
 		"icons/f1.png"
 		"icons/f2.png"
+		"icons/f3.png"
 )
 
 idf_component_get_property(lvgl_lib lvgl COMPONENT_LIB)

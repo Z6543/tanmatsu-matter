@@ -12,6 +12,13 @@
 
 static const char *TAG = "ui";
 
+#if LV_USE_SNAPSHOT
+#include "esp_heap_caps.h"
+#include "mbedtls/base64.h"
+#include <stdio.h>
+#include <string.h>
+#endif
+
 // Event queue for Matter -> UI communication
 static QueueHandle_t s_ui_event_queue = NULL;
 
@@ -533,10 +540,13 @@ extern const uint8_t icon_f1_png_start[]  asm("_binary_f1_png_start");
 extern const uint8_t icon_f1_png_end[]    asm("_binary_f1_png_end");
 extern const uint8_t icon_f2_png_start[]  asm("_binary_f2_png_start");
 extern const uint8_t icon_f2_png_end[]    asm("_binary_f2_png_end");
+extern const uint8_t icon_f3_png_start[]  asm("_binary_f3_png_start");
+extern const uint8_t icon_f3_png_end[]    asm("_binary_f3_png_end");
 
 static lv_image_dsc_t img_dsc_esc;
 static lv_image_dsc_t img_dsc_f1;
 static lv_image_dsc_t img_dsc_f2;
+static lv_image_dsc_t img_dsc_f3;
 static bool icons_initialized = false;
 
 static void init_key_icons(void) {
@@ -562,6 +572,13 @@ static void init_key_icons(void) {
     img_dsc_f2.header.h = 32;
     img_dsc_f2.data = icon_f2_png_start;
     img_dsc_f2.data_size = icon_f2_png_end - icon_f2_png_start;
+
+    img_dsc_f3.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f3.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f3.header.w = 32;
+    img_dsc_f3.header.h = 32;
+    img_dsc_f3.data = icon_f3_png_start;
+    img_dsc_f3.data_size = icon_f3_png_end - icon_f3_png_start;
 
     icons_initialized = true;
 }
@@ -591,6 +608,128 @@ static void apply_focus_style(lv_obj_t *obj) {
     lv_obj_set_style_border_color(obj, lv_color_hex(0x00E5FF), LV_STATE_FOCUSED | LV_STATE_CHECKED);
     lv_obj_set_style_border_width(obj, 3, LV_STATE_FOCUSED | LV_STATE_CHECKED);
     lv_obj_set_style_border_opa(obj, LV_OPA_COVER, LV_STATE_FOCUSED | LV_STATE_CHECKED);
+}
+
+// ---- Screenshot (F3) ----
+#if LV_USE_SNAPSHOT
+static void write_le16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void write_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+// Stream base64 in chunks of 57 raw bytes (= 76 b64 chars).
+// 57 is a multiple of 3 so no padding until the final chunk.
+#define B64_RAW_CHUNK 57
+#define B64_OUT_CHUNK 80  // 57*4/3 + margin
+
+static void b64_stream(
+    const uint8_t *data, uint32_t len, uint32_t *carry) {
+    // carry tracks leftover bytes from previous call
+    (void)carry;
+    uint8_t out[B64_OUT_CHUNK];
+    size_t olen;
+    uint32_t off = 0;
+    while (off < len) {
+        uint32_t chunk = len - off;
+        if (chunk > B64_RAW_CHUNK) chunk = B64_RAW_CHUNK;
+        // Only last chunk of entire stream may be non-3-aligned
+        mbedtls_base64_encode(
+            out, sizeof(out), &olen,
+            data + off, chunk);
+        out[olen] = '\0';
+        printf("%s\n", (char *)out);
+        off += chunk;
+    }
+}
+
+static void take_screenshot(void) {
+    lv_obj_t *scr = lv_screen_active();
+    if (!scr) return;
+
+    ESP_LOGI(TAG, "Taking screenshot...");
+
+    lv_draw_buf_t *snap = lv_snapshot_take(
+        scr, LV_COLOR_FORMAT_RGB565);
+    if (!snap) {
+        ESP_LOGE(TAG, "Snapshot failed (out of memory?)");
+        return;
+    }
+
+    uint32_t w = snap->header.w;
+    uint32_t h = snap->header.h;
+    uint32_t stride = snap->header.stride;
+    uint32_t row_bytes = w * 2;  // RGB565
+    // BMP rows must be 4-byte aligned
+    uint32_t bmp_row = (row_bytes + 3) & ~3u;
+    uint32_t pixel_size = bmp_row * h;
+    uint32_t hdr_size = 14 + 40;
+    uint32_t file_size = hdr_size + pixel_size;
+
+    // Build a single contiguous BMP in SPIRAM so we can
+    // base64-stream it with clean 3-byte aligned chunks.
+    uint8_t *bmp = heap_caps_malloc(
+        file_size, MALLOC_CAP_SPIRAM);
+    if (!bmp) {
+        ESP_LOGE(TAG, "BMP alloc failed (%lu bytes)",
+                 (unsigned long)file_size);
+        lv_draw_buf_destroy(snap);
+        return;
+    }
+
+    // BMP file header (14 bytes)
+    memset(bmp, 0, hdr_size);
+    bmp[0] = 'B'; bmp[1] = 'M';
+    write_le32(&bmp[2], file_size);
+    write_le32(&bmp[10], hdr_size);
+    // DIB header (40 bytes)
+    write_le32(&bmp[14], 40);
+    write_le32(&bmp[18], w);
+    write_le32(&bmp[22], h);
+    write_le16(&bmp[26], 1);     // planes
+    write_le16(&bmp[28], 16);    // bpp
+    write_le32(&bmp[30], 0);     // BI_RGB
+    write_le32(&bmp[34], pixel_size);
+
+    // Copy pixel rows bottom-to-top (BMP row order)
+    uint32_t pad_bytes = bmp_row - row_bytes;
+    uint8_t *dst = bmp + hdr_size;
+    for (int y = (int)h - 1; y >= 0; y--) {
+        const uint8_t *src = snap->data + (y * stride);
+        memcpy(dst, src, row_bytes);
+        if (pad_bytes > 0)
+            memset(dst + row_bytes, 0, pad_bytes);
+        dst += bmp_row;
+    }
+
+    lv_draw_buf_destroy(snap);
+
+    printf("\n===SCREENSHOT_START===\n");
+    b64_stream(bmp, file_size, NULL);
+    printf("===SCREENSHOT_END===\n");
+    fflush(stdout);
+
+    free(bmp);
+    ESP_LOGI(TAG, "Screenshot done (%lux%lu)",
+             (unsigned long)w, (unsigned long)h);
+}
+#endif
+
+static void global_key_cb(lv_event_t *e) {
+    uint32_t key = lv_event_get_key(e);
+#if LV_USE_SNAPSHOT
+    if (key == BSP_KEY_F3) {
+        take_screenshot();
+        return;
+    }
+#endif
+    (void)key;
 }
 
 static lv_obj_t *create_key_hints_bar(lv_obj_t *parent) {
@@ -676,6 +815,8 @@ static void create_dashboard_screen(void) {
     hint_add_text(dash_hints, "Details");
     hint_add_icon(dash_hints, &img_dsc_f2);
     hint_add_text(dash_hints, "Force Remove");
+    hint_add_icon(dash_hints, &img_dsc_f3);
+    hint_add_text(dash_hints, "Screenshot");
 }
 
 static void refresh_dashboard(void) {
@@ -1005,6 +1146,15 @@ void ui_screens_init(void) {
     create_dashboard_screen();
     create_commission_screen();
     create_detail_screen();
+
+    // Register global key handler on all keypad indevs
+    lv_indev_t *indev = NULL;
+    while ((indev = lv_indev_get_next(indev)) != NULL) {
+        if (lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) {
+            lv_indev_add_event_cb(indev, global_key_cb,
+                LV_EVENT_KEY, NULL);
+        }
+    }
 
     refresh_dashboard();
     switch_to_screen(scr_dashboard, grp_dashboard);
