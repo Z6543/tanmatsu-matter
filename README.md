@@ -41,6 +41,12 @@ main/
   device_manager.c/h        - Device persistence (NVS storage)
   matter_project_config.h   - CHIP project configuration overrides
   esp_ot_config.h           - OpenThread RCP UART pin configuration
+  paa_certs_embedded.cpp/h  - Custom AttestationTrustStore backed by compiled-in DER arrays
+  paa_cert_data.cpp         - Auto-generated cert data (regenerate with scripts/generate_paa_array.py)
+paa_cert/                   - Source DER cert files (SDK test certs + DCL-fetched certs)
+scripts/
+  fetch_paa_certs.sh        - Fetch latest PAA certs from the Matter DCL into paa_cert/
+  generate_paa_array.py     - Regenerate paa_cert_data.cpp from paa_cert/*.der
 sdkconfigs/
   general                   - Shared sdkconfig defaults (all targets)
   tanmatsu                  - Tanmatsu-specific sdkconfig defaults
@@ -192,6 +198,30 @@ Notable sdkconfig settings in `sdkconfigs/tanmatsu`:
 | `CONFIG_OPENTHREAD_BORDER_ROUTER` | `y` | Enable Thread Border Router (ESP32-C6 RCP) |
 | `CONFIG_OPENTHREAD_RADIO_SPINEL_UART` | `y` | Spinel over UART to C6 RCP |
 | `CONFIG_OPENTHREAD_FTD` | `y` | Full Thread Device (required for border router) |
+
+## Device Attestation Certificates
+
+The firmware includes 161 PAA (Product Attestation Authority) root certificates compiled directly into the binary — 158 fetched from the Matter DCL (production and test networks) and 3 from the chip SDK test suite. These are used to verify that commissioned devices are genuine certified Matter products.
+
+The certificates are stored as DER byte arrays in `main/paa_cert_data.cpp` (auto-generated) and looked up by SKID at commissioning time. If attestation fails for a known-good device, the cert bundle may be out of date.
+
+### Refreshing the certificate bundle
+
+```bash
+# 1. Install fetch script dependencies (once)
+pip install click click-option-group requests cryptography
+
+# 2. Fetch the latest certs from the Matter DCL
+./scripts/fetch_paa_certs.sh
+
+# 3. Regenerate the compiled-in cert array
+python3 scripts/generate_paa_array.py
+
+# 4. Rebuild and flash
+make build && make flash
+```
+
+`fetch_paa_certs.sh` downloads from both the DCL MainNet and TestNet and saves the DER files as `paa_cert/dcl_NNNN.der`. Previously downloaded DCL certs are replaced; the three SDK test certs (`Chip-Test-PAA-*.der`) are preserved.
 
 ## Thread Commissioning
 
