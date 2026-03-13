@@ -9,6 +9,7 @@
 #include "freertos/queue.h"
 #include "lvgl.h"
 #include "nvs.h"
+#include <stdlib.h>
 
 static const char *TAG = "ui";
 
@@ -63,6 +64,7 @@ static uint64_t  detail_node_id = 0;
 // Commissioning state
 static uint64_t s_pending_node_id = 0;
 static char     s_pending_name[MATTER_DEVICE_NAME_LEN] = {};
+static bool     s_commissioning_active = false;
 
 // Confirmation dialog state
 static lv_obj_t *confirm_dialog = NULL;
@@ -246,12 +248,14 @@ static void event_timer_cb(lv_timer_t *timer) {
             }
             break;
         case MATTER_EVENT_PASE_FAILED:
+            s_commissioning_active = false;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "PASE failed!");
             }
             if (commission_start_btn) lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
             break;
         case MATTER_EVENT_COMMISSION_SUCCESS:
+            s_commissioning_active = false;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "Success!");
             }
@@ -261,12 +265,14 @@ static void event_timer_cb(lv_timer_t *timer) {
             refresh_dashboard();
             break;
         case MATTER_EVENT_COMMISSION_FAILED:
+            s_commissioning_active = false;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "Commissioning failed!");
             }
             if (commission_start_btn) lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
             break;
         case MATTER_EVENT_COMMISSION_TIMEOUT:
+            s_commissioning_active = false;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label,
                     "Commissioning timed out (90s)");
@@ -370,6 +376,39 @@ static void method_radio_cb(lv_event_t *e) {
     lv_group_focus_obj(first_ta);
 }
 
+static bool is_all_digits(const char *s) {
+    if (!s || *s == '\0') return false;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') return false;
+    }
+    return true;
+}
+
+static bool is_valid_pincode(const char *s, uint32_t *out) {
+    if (!is_all_digits(s)) return false;
+    long val = strtol(s, NULL, 10);
+    if (val < 1 || val > 99999998) return false;
+    // Matter spec invalid codes: all-same-digit and 12345678/87654321
+    uint32_t u = (uint32_t)val;
+    if (u == 12345678 || u == 87654321) return false;
+    bool all_same = true;
+    for (int i = 1; i < 8; i++) {
+        if (((u / 10) % 10) != (u % 10)) { all_same = false; break; }
+        u /= 10;
+    }
+    if (all_same) return false;
+    *out = (uint32_t)val;
+    return true;
+}
+
+static bool is_valid_discriminator(const char *s, uint16_t *out) {
+    if (!is_all_digits(s)) return false;
+    long val = strtol(s, NULL, 10);
+    if (val < 0 || val > 4095) return false;
+    *out = (uint16_t)val;
+    return true;
+}
+
 static void btn_start_commission_cb(lv_event_t *e) {
     (void)e;
     const char *code_str = lv_textarea_get_text(commission_code_ta);
@@ -385,15 +424,6 @@ static void btn_start_commission_cb(lv_event_t *e) {
         return;
     }
 
-    if (commission_method == 1 || commission_method == 4 ||
-        commission_method == 5) {
-        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
-        if (!disc_str || disc_str[0] == '\0') {
-            lv_label_set_text(commission_status_label, "Enter discriminator!");
-            return;
-        }
-    }
-
     strncpy(s_pending_name, name_str, MATTER_DEVICE_NAME_LEN - 1);
     s_pending_name[MATTER_DEVICE_NAME_LEN - 1] = '\0';
 
@@ -403,46 +433,54 @@ static void btn_start_commission_cb(lv_event_t *e) {
     lv_label_set_text(commission_status_label, "Starting...");
     lv_obj_add_state(commission_start_btn, LV_STATE_DISABLED);
 
+    // Methods that require a numeric PIN code
+    bool needs_pincode = (commission_method != 2 && commission_method != 3);
+    uint32_t pincode = 0;
+    if (needs_pincode && !is_valid_pincode(code_str, &pincode)) {
+        lv_label_set_text(commission_status_label,
+            "Invalid PIN (1-99999998)");
+        lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
+        return;
+    }
+
+    // Methods that require a discriminator
+    bool needs_disc = (commission_method == 1 || commission_method == 4 ||
+                       commission_method == 5);
+    uint16_t disc = 0;
+    if (needs_disc) {
+        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+        if (!is_valid_discriminator(disc_str, &disc)) {
+            lv_label_set_text(commission_status_label,
+                "Invalid discriminator (0-4095)");
+            lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
+            return;
+        }
+    }
+
     switch (commission_method) {
-    case 0: {
-        // Setup PIN code, on-network (no discriminator)
-        uint32_t pincode = (uint32_t)atol(code_str);
+    case 0:
         err = matter_commission_on_network(s_pending_node_id, pincode);
         break;
-    }
     case 1: {
-        // Discriminator + Passcode with optional discovery hints
-        uint32_t pincode = (uint32_t)atol(code_str);
-        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
-        uint16_t disc = (uint16_t)atoi(disc_str);
         const char *hints_str = lv_textarea_get_text(commission_hints_ta);
-        uint8_t hints = (hints_str && hints_str[0]) ? (uint8_t)atoi(hints_str) : 0;
-        err = matter_commission_disc_pass(s_pending_node_id, pincode, disc, hints);
+        uint8_t hints = 0;
+        if (hints_str && is_all_digits(hints_str) && hints_str[0]) {
+            hints = (uint8_t)strtol(hints_str, NULL, 10);
+        }
+        err = matter_commission_disc_pass(
+            s_pending_node_id, pincode, disc, hints);
         break;
     }
-    case 2: {
-        // Manual pairing code (auto-detects transport from code)
+    case 2:
         err = matter_commission_setup_code(s_pending_node_id, code_str);
         break;
-    }
-    case 3: {
-        // QR code payload (auto-detects transport from code)
+    case 3:
         err = matter_commission_setup_code(s_pending_node_id, code_str);
         break;
-    }
-    case 4: {
-        // BLE+WiFi: discriminator + passcode over BLE, WiFi creds auto-fetched
-        uint32_t pincode = (uint32_t)atol(code_str);
-        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
-        uint16_t disc = (uint16_t)atoi(disc_str);
+    case 4:
         err = matter_commission_ble_wifi(s_pending_node_id, pincode, disc);
         break;
-    }
     case 5: {
-        // BLE+Thread: discover via BLE, commission with Thread dataset
-        uint32_t pincode = (uint32_t)atol(code_str);
-        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
-        uint16_t disc = (uint16_t)atoi(disc_str);
         const char *thread_str = lv_textarea_get_text(commission_thread_ta);
         err = matter_commission_ble_thread(
             s_pending_node_id, pincode, disc, thread_str);
@@ -459,12 +497,14 @@ static void btn_start_commission_cb(lv_event_t *e) {
         lv_label_set_text(commission_status_label, msg);
         lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
     } else {
+        s_commissioning_active = true;
         lv_label_set_text(commission_status_label, "Establishing PASE...");
     }
 }
 
 // ---- Dashboard card callbacks ----
 static void card_click_cb(lv_event_t *e) {
+    if (s_commissioning_active) return;
     uint64_t node_id = (uint64_t)(uintptr_t)lv_event_get_user_data(e);
     const matter_device_t *dev = device_manager_find(node_id);
     if (dev) {
@@ -491,18 +531,21 @@ static void card_key_cb(lv_event_t *e) {
 // ---- Detail screen callbacks ----
 static void btn_on_cb(lv_event_t *e) {
     (void)e;
+    if (s_commissioning_active) return;
     const matter_device_t *dev = device_manager_find(detail_node_id);
     if (dev) matter_device_send_on(dev->node_id, dev->endpoint_id);
 }
 
 static void btn_off_cb(lv_event_t *e) {
     (void)e;
+    if (s_commissioning_active) return;
     const matter_device_t *dev = device_manager_find(detail_node_id);
     if (dev) matter_device_send_off(dev->node_id, dev->endpoint_id);
 }
 
 static void btn_toggle_cb(lv_event_t *e) {
     (void)e;
+    if (s_commissioning_active) return;
     const matter_device_t *dev = device_manager_find(detail_node_id);
     if (dev) matter_device_send_toggle(dev->node_id, dev->endpoint_id);
 }
