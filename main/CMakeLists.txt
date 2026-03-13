@@ -7,6 +7,8 @@ idf_component_register(
 		"matter_commission.cpp"
 		"matter_device_control.cpp"
 		"bsp_lvgl.c"
+		"paa_certs_embedded.cpp"
+		"paa_cert_data.cpp"
 	PRIV_REQUIRES
 		esp_lcd
 		esp_timer

@@ -1,8 +1,10 @@
 # TODO
 
+- [ ] **Create license file, get licenses from esp-idf and esp-matter
+
 ## Security
 
-- [ ] **Include the correct certificates to validate the device.
+- [x] **Include the correct certificates to validate the device** — switched to `SPIFFS_ATTESTATION_TRUST_STORE`; `paa_cert/` contains test PAA DER certs from the chip SDK and is auto-flashed via `spiffs_create_partition_image`. Run `scripts/fetch_paa_certs.sh` to pull the latest prod + test certs from the Matter DCL.
 
 ## Reliability
 
@@ -21,6 +23,7 @@
 
 ## UI / UX
 
+- [ ] **Add proper Matter logo to the app
 - [x] **Add screenshot capability, use one of the Function keys** — F3 takes a screenshot, outputs BMP as base64 over serial console with `===SCREENSHOT_START===`/`===SCREENSHOT_END===` markers.
 - [x] **Add confirmation dialog for destructive actions** — "Force Remove" (`card_key_cb` on F2) and "Unpair Device" immediately delete without confirmation. Add a confirmation prompt.
 - [x] **Show commissioning progress steps** — the status label only shows "PASE established..." and then success/fail. Show intermediate steps (attestation, network setup, operational discovery) to help diagnose failures.

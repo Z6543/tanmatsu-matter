@@ -1,8 +1,10 @@
 #include "matter_commission.h"
 #include "matter_init.h"
+#include "paa_certs_embedded.h"
 
 #include <esp_log.h>
 #include <esp_matter.h>
+#include <esp_matter_attestation_trust_store.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_pairing_command.h>
 #include <platform/PlatformManager.h>
@@ -19,6 +21,7 @@
 #endif
 
 static const char *TAG = "matter_init";
+static EmbeddedAttestationTrustStore s_embedded_paa_store;
 static matter_event_cb_t s_event_cb = nullptr;
 
 extern "C" void matter_post_event(matter_event_t event) {
@@ -159,6 +162,10 @@ esp_err_t matter_init(matter_event_cb_t cb) {
             ESP_LOGE(TAG, "Controller client init failed: %d", err);
             return err;
         }
+        chip::Credentials::set_custom_attestation_trust_store(
+            &s_embedded_paa_store);
+        ESP_LOGI(TAG, "PAA trust store: %zu embedded certs",
+                 embedded_paa_certs_count());
         err = esp_matter::controller::matter_controller_client::get_instance().setup_commissioner();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Commissioner setup failed: %d", err);
