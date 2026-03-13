@@ -1,6 +1,6 @@
 # Tanmatsu Matter Commissioner
 
-A Matter commissioner/controller GUI application for the [Tanmatsu](https://badge.team/) device (ESP32-P4). Commission and control Matter-compatible smart home devices directly from the Tanmatsu using its built-in display and input controls.
+A Matter commissioner/controller GUI application for the [Tanmatsu](https://nicolaielectronics.nl/tanmatsu/) device (ESP32-P4). Commission and control Matter-compatible smart home devices directly from the Tanmatsu using its built-in display and input controls.
 
 ## Features
 
@@ -74,7 +74,7 @@ Follow the [esp-matter setup guide](https://docs.espressif.com/projects/esp-matt
 
 ### tanmatsu-radio (Thread support)
 
-Thread commissioning requires the ESP32-C6 co-processor to run the [tanmatsu-radio](https://github.com/badgeteam/tanmatsu-radio) firmware, which provides an OpenThread RCP over UART alongside WiFi/BLE over SDIO.
+Thread commissioning requires the ESP32-C6 co-processor to run the [tanmatsu-radio](https://github.com/nicolai-electronics/tanmatsu-radio) firmware, which provides an OpenThread RCP over UART alongside WiFi/BLE over SDIO.
 
 Flash the radio firmware to the ESP32-C6 before using Thread features:
 
