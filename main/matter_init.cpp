@@ -14,6 +14,7 @@
 #include <esp_openthread.h>
 #include <esp_openthread_border_router.h>
 #include <esp_openthread_lock.h>
+#include <esp_openthread_spinel.h>
 #include <esp_ot_config.h>
 #include <mdns.h>
 #include <openthread/dataset.h>
@@ -64,6 +65,33 @@ static void on_commissioning_failure(
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
 static bool s_thread_br_init = false;
 
+static void post_thread_br_error(const char *message) {
+    ESP_LOGE(TAG, "Thread BR error: %s", message);
+    if (!s_event_cb) return;
+    matter_event_t ev = {};
+    ev.type = MATTER_EVENT_THREAD_BR_ERROR;
+    strncpy(ev.msg, message, MATTER_EVENT_MSG_LEN - 1);
+    s_event_cb(ev);
+}
+
+static void on_rcp_failure(void) {
+    post_thread_br_error(
+        "Thread radio (RCP) not responding.\n"
+        "Flash the C6 with ot_rcp firmware.");
+}
+
+static void on_rcp_compat_error(void) {
+    post_thread_br_error(
+        "Thread radio firmware version mismatch.\n"
+        "Update the C6 with a compatible ot_rcp build.");
+}
+
+static void on_rcp_reset_failure(void) {
+    post_thread_br_error(
+        "Failed to reset the Thread radio co-processor.\n"
+        "Check that the C6 has ot_rcp firmware installed.");
+}
+
 static void init_thread_border_router() {
     if (s_thread_br_init) return;
     ESP_LOGI(TAG, "Initializing Thread border router");
@@ -75,7 +103,14 @@ static void init_thread_border_router() {
     ESP_ERROR_CHECK(mdns_hostname_set("tanmatsu-br"));
 
     esp_openthread_lock_acquire(portMAX_DELAY);
-    esp_openthread_border_router_init();
+    esp_err_t err = esp_openthread_border_router_init();
+    if (err != ESP_OK) {
+        esp_openthread_lock_release();
+        post_thread_br_error(
+            "Border router init failed.\n"
+            "Ensure the C6 has ot_rcp firmware.");
+        return;
+    }
 
     otInstance *instance = esp_openthread_get_instance();
     if (!otDatasetIsCommissioned(instance)) {
@@ -124,6 +159,11 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         ESP_LOGW(TAG, "WiFi STA netif not found, border router "
                  "may not work");
     }
+
+    esp_openthread_register_rcp_failure_handler(on_rcp_failure);
+    esp_openthread_set_compatibility_error_callback(on_rcp_compat_error);
+    esp_openthread_set_coprocessor_reset_failure_callback(
+        on_rcp_reset_failure);
 
     esp_openthread_platform_config_t ot_config = {
         .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),

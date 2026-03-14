@@ -19,11 +19,10 @@
 
 ## Border router
 
-- [ ] **Handle border router init failure** — `esp_openthread_border_router_init()` return value is not checked (`matter_init.cpp:67`). Log and surface errors to the UI if the RCP is unresponsive or UART fails.
+- [x] **Handle border router init failure** — registers RCP failure, compatibility error, and co-processor reset callbacks before OpenThread init. Checks `esp_openthread_border_router_init()` return value. All failures post `MATTER_EVENT_THREAD_BR_ERROR` with a message hinting to install ot_rcp firmware on the C6.
 
 ## UI / UX
 
-- [ ] **Add proper Matter logo to the app
 - [x] **Add screenshot capability, use one of the Function keys** — F3 takes a screenshot, outputs BMP as base64 over serial console with `===SCREENSHOT_START===`/`===SCREENSHOT_END===` markers.
 - [x] **Add confirmation dialog for destructive actions** — "Force Remove" (`card_key_cb` on F2) and "Unpair Device" immediately delete without confirmation. Add a confirmation prompt.
 - [x] **Show commissioning progress steps** — the status label only shows "PASE established..." and then success/fail. Show intermediate steps (attestation, network setup, operational discovery) to help diagnose failures.

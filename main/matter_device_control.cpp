@@ -137,19 +137,19 @@ static void info_read_complete(void) {
 
     // Build name: prefer NodeLabel, fall back to "VendorName ProductName"
     if (s_info_read.node_label[0]) {
-        strncpy(ev.device_name, s_info_read.node_label,
-                MATTER_DEVICE_INFO_NAME_LEN - 1);
+        strncpy(ev.msg, s_info_read.node_label,
+                MATTER_EVENT_MSG_LEN - 1);
     } else if (s_info_read.product_name[0]) {
         if (s_info_read.vendor_name[0]) {
-            snprintf(ev.device_name, MATTER_DEVICE_INFO_NAME_LEN,
+            snprintf(ev.msg, MATTER_EVENT_MSG_LEN,
                      "%s %s", s_info_read.vendor_name,
                      s_info_read.product_name);
         } else {
-            strncpy(ev.device_name, s_info_read.product_name,
-                    MATTER_DEVICE_INFO_NAME_LEN - 1);
+            strncpy(ev.msg, s_info_read.product_name,
+                    MATTER_EVENT_MSG_LEN - 1);
         }
     }
-    // If all empty, device_name stays "" and device_manager_add
+    // If all empty, msg stays "" and device_manager_add
     // will generate "Device N"
 
     s_info_read.active = false;

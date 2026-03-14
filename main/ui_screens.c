@@ -266,7 +266,7 @@ static void event_timer_cb(lv_timer_t *timer) {
         case MATTER_EVENT_DEVICE_INFO_READY: {
             // Use user-provided name if set, otherwise discovered name
             const char *name = s_pending_name[0] ? s_pending_name
-                                                 : ev.device_name;
+                                                 : ev.msg;
             uint16_t ep = ev.endpoint_id ? ev.endpoint_id : 1;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "Success!");
@@ -299,6 +299,13 @@ static void event_timer_cb(lv_timer_t *timer) {
                     "may not be officially certified.");
                 lv_obj_set_style_text_color(commission_status_label,
                     lv_color_hex(0xFFA000), 0);
+            }
+            break;
+        case MATTER_EVENT_THREAD_BR_ERROR:
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label, ev.msg);
+                lv_obj_set_style_text_color(dashboard_status_label,
+                    lv_color_hex(0xFF4444), 0);
             }
             break;
         }
