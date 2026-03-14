@@ -351,7 +351,11 @@ static void read_keyboard(lv_indev_t* indev, lv_indev_data_t* data) {
                             data->state = event.args_navigation.state;
                             break;
                         case BSP_INPUT_NAVIGATION_KEY_TAB:
-                            data->key   = LV_KEY_NEXT;
+                            if (event.args_navigation.modifiers & BSP_INPUT_MODIFIER_SHIFT) {
+                                data->key = LV_KEY_PREV;
+                            } else {
+                                data->key = LV_KEY_NEXT;
+                            }
                             data->state = event.args_navigation.state;
                             break;
                         case BSP_INPUT_NAVIGATION_KEY_BACKSPACE:

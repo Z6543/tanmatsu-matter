@@ -330,6 +330,14 @@ static void btn_add_cb(lv_event_t *e) {
     }
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
+
+    // Focus the first visible text entry for the selected method
+    bool need_disc = (commission_method == 1 ||
+                      commission_method == 4 ||
+                      commission_method == 5);
+    lv_obj_t *first_ta = need_disc ? commission_disc_ta
+                                   : commission_code_ta;
+    lv_group_focus_obj(first_ta);
 }
 
 static void btn_back_dashboard_cb(lv_event_t *e) {
@@ -897,6 +905,7 @@ static void refresh_dashboard(void) {
     if (count == 0) {
         lv_obj_t *lbl = lv_label_create(dashboard_container);
         lv_label_set_text(lbl, "No devices.\nSelect '" LV_SYMBOL_PLUS " Add' to commission.");
+        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 0));
         return;
     }
 
@@ -948,6 +957,13 @@ static void refresh_dashboard(void) {
         lv_obj_set_style_border_width(card, 3, LV_STATE_FOCUSED);
 
         lv_group_add_obj(grp_dashboard, card);
+    }
+
+    // Focus first device card if available, otherwise the Add button
+    if (lv_group_get_obj_count(grp_dashboard) > 1) {
+        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 1));
+    } else {
+        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 0));
     }
 }
 
