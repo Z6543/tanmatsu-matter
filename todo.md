@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] **Create license file, get licenses from esp-idf and esp-matter
+- [x] **Create license file, get licenses from esp-idf and esp-matter
 
 ## Security
 
@@ -14,8 +14,8 @@
 
 ## Device support
 
-- [ ] **Support multiple endpoints** — `device_manager_add` hardcodes endpoint 1 (`ui_screens.c:127`). After commissioning, read the device's descriptor cluster to discover actual endpoints and device types.
-- [ ] **Read device type during commissioning** — after successful commissioning, read the Basic Information cluster (vendor name, product name) and use it as the default device name instead of "Device N".
+- [x] **Support multiple endpoints** — after commissioning, reads Descriptor cluster PartsList (endpoint 0) to discover the first application endpoint instead of hardcoding endpoint 1.
+- [x] **Read device type during commissioning** — after successful commissioning, reads Basic Information cluster (NodeLabel, VendorName, ProductName) from endpoint 0 and uses it as the default device name. User-provided name takes priority if set.
 
 ## Border router
 

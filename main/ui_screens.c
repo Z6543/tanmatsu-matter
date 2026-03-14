@@ -257,13 +257,25 @@ static void event_timer_cb(lv_timer_t *timer) {
         case MATTER_EVENT_COMMISSION_SUCCESS:
             s_commissioning_active = false;
             if (commission_status_label) {
-                lv_label_set_text(commission_status_label, "Success!");
+                lv_label_set_text(commission_status_label,
+                    "Success! Reading device info...");
             }
             if (commission_start_btn) lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
-            device_manager_add(ev.node_id, 1, s_pending_name);
-            matter_device_subscribe_onoff(ev.node_id, 1);
+            matter_device_read_info(ev.node_id);
+            break;
+        case MATTER_EVENT_DEVICE_INFO_READY: {
+            // Use user-provided name if set, otherwise discovered name
+            const char *name = s_pending_name[0] ? s_pending_name
+                                                 : ev.device_name;
+            uint16_t ep = ev.endpoint_id ? ev.endpoint_id : 1;
+            if (commission_status_label) {
+                lv_label_set_text(commission_status_label, "Success!");
+            }
+            device_manager_add(ev.node_id, ep, name);
+            matter_device_subscribe_onoff(ev.node_id, ep);
             refresh_dashboard();
             break;
+        }
         case MATTER_EVENT_COMMISSION_FAILED:
             s_commissioning_active = false;
             if (commission_status_label) {

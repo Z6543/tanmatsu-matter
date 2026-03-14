@@ -16,11 +16,16 @@ typedef enum {
     MATTER_EVENT_STACK_READY,
     MATTER_EVENT_ATTESTATION_WARNING,
     MATTER_EVENT_COMMISSION_TIMEOUT,
+    MATTER_EVENT_DEVICE_INFO_READY,
 } matter_event_type_t;
+
+#define MATTER_DEVICE_INFO_NAME_LEN 64
 
 typedef struct {
     matter_event_type_t type;
     uint64_t            node_id;
+    uint16_t            endpoint_id;
+    char                device_name[MATTER_DEVICE_INFO_NAME_LEN];
 } matter_event_t;
 
 typedef void (*matter_event_cb_t)(matter_event_t event);
