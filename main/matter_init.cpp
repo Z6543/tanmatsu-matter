@@ -10,6 +10,7 @@
 #include <platform/PlatformManager.h>
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+#include <driver/uart.h>
 #include <esp_netif.h>
 #include <esp_openthread.h>
 #include <esp_openthread_border_router.h>
@@ -65,7 +66,68 @@ static void on_commissioning_failure(
 }
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+static bool s_thread_available = false;
 static bool s_thread_br_init = false;
+
+// Probe the RCP co-processor over UART by sending a Spinel HDLC
+// NOOP frame and waiting for any response. Returns true if the
+// RCP responds within the timeout.
+static bool probe_rcp_uart(void) {
+    const uart_port_t port = UART_NUM_1;
+    uart_config_t cfg = {
+        .baud_rate = 460800,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 0,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+
+    esp_err_t err = uart_driver_install(
+        port, 256, 256, 0, NULL, 0);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "RCP probe: UART install failed: %d", err);
+        return false;
+    }
+    uart_param_config(port, &cfg);
+    uart_set_pin(port, GPIO_NUM_53, GPIO_NUM_54,
+                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    uart_flush_input(port);
+
+    // Spinel NOOP: header=0x80, cmd=0x00
+    // CRC-16/X.25 (HDLC FCS-16) over those two bytes
+    const uint8_t spinel[] = {0x80, 0x00};
+    uint16_t crc = 0xFFFF;
+    for (int i = 0; i < 2; i++) {
+        crc ^= spinel[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 1) ? (crc >> 1) ^ 0x8408
+                            : crc >> 1;
+        }
+    }
+    crc = ~crc;
+
+    // HDLC frame: flag + data + FCS(LE) + flag
+    // No bytes need escaping (none are 0x7E or 0x7D)
+    const uint8_t frame[] = {
+        0x7E,
+        spinel[0], spinel[1],
+        (uint8_t)(crc & 0xFF), (uint8_t)(crc >> 8),
+        0x7E,
+    };
+
+    uart_write_bytes(port, frame, sizeof(frame));
+    uart_wait_tx_done(port, pdMS_TO_TICKS(100));
+
+    uint8_t buf[64];
+    int len = uart_read_bytes(
+        port, buf, sizeof(buf), pdMS_TO_TICKS(1500));
+    uart_driver_delete(port);
+
+    ESP_LOGI(TAG, "RCP probe: got %d bytes", len);
+    return len > 0;
+}
 
 static void post_thread_br_error(const char *message) {
     ESP_LOGE(TAG, "Thread BR error: %s", message);
@@ -142,30 +204,37 @@ esp_err_t matter_init(matter_event_cb_t cb) {
     s_event_cb = cb;
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
-    // Backbone netif must be set before esp_openthread_init()
-    // (called inside esp_matter::start). The WiFi STA netif is
-    // already created by wifi_connection_init_stack() in main.
-    esp_netif_t *backbone = esp_netif_get_handle_from_ifkey(
-        "WIFI_STA_DEF");
-    if (backbone) {
-        esp_openthread_set_backbone_netif(backbone);
+    // Probe the RCP co-processor before configuring OpenThread.
+    // If absent, skip OT config so esp_matter::start() won't
+    // crash in SpinelDriver::ResetCoprocessor().
+    s_thread_available = probe_rcp_uart();
+    if (!s_thread_available) {
+        ESP_LOGW(TAG, "Thread radio (RCP) not detected on UART, "
+                 "proceeding without Thread support");
     } else {
-        ESP_LOGW(TAG, "WiFi STA netif not found, border router "
-                 "may not work");
+        esp_netif_t *backbone = esp_netif_get_handle_from_ifkey(
+            "WIFI_STA_DEF");
+        if (backbone) {
+            esp_openthread_set_backbone_netif(backbone);
+        } else {
+            ESP_LOGW(TAG, "WiFi STA netif not found, border "
+                     "router may not work");
+        }
+
+        esp_openthread_register_rcp_failure_handler(on_rcp_failure);
+        esp_openthread_set_compatibility_error_callback(
+            on_rcp_compat_error);
+        esp_openthread_set_coprocessor_reset_failure_callback(
+            on_rcp_reset_failure);
+
+        esp_openthread_platform_config_t ot_config = {
+            .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
+            .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
+            .port_config = ESP_OPENTHREAD_DEFAULT_PORT_CONFIG(),
+        };
+        set_openthread_platform_config(&ot_config);
+        ESP_LOGI(TAG, "OpenThread platform configured (UART RCP)");
     }
-
-    esp_openthread_register_rcp_failure_handler(on_rcp_failure);
-    esp_openthread_set_compatibility_error_callback(on_rcp_compat_error);
-    esp_openthread_set_coprocessor_reset_failure_callback(
-        on_rcp_reset_failure);
-
-    esp_openthread_platform_config_t ot_config = {
-        .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
-        .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
-        .port_config = ESP_OPENTHREAD_DEFAULT_PORT_CONFIG(),
-    };
-    set_openthread_platform_config(&ot_config);
-    ESP_LOGI(TAG, "OpenThread platform configured (UART RCP)");
 #endif
 
     esp_err_t err = esp_matter::start(app_event_cb);
@@ -208,9 +277,18 @@ esp_err_t matter_init(matter_event_cb_t cb) {
     return ESP_OK;
 }
 
+bool matter_thread_available(void) {
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    return s_thread_available;
+#else
+    return false;
+#endif
+}
+
 esp_err_t matter_get_thread_active_dataset_hex(
     char *out, size_t out_len) {
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+    if (!s_thread_available) return ESP_ERR_NOT_SUPPORTED;
     otOperationalDatasetTlvs tlvs;
 
     esp_openthread_lock_acquire(portMAX_DELAY);
@@ -244,6 +322,7 @@ esp_err_t matter_get_thread_active_dataset_hex(
 
 esp_err_t matter_start_thread_br(void) {
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+    if (!s_thread_available) return ESP_ERR_NOT_SUPPORTED;
     if (s_thread_br_init) {
         ESP_LOGI(TAG, "Thread border router already running");
         return ESP_OK;
@@ -271,6 +350,7 @@ esp_err_t matter_start_thread_br(void) {
 
 esp_err_t matter_stop_thread_br(void) {
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
+    if (!s_thread_available) return ESP_ERR_NOT_SUPPORTED;
     if (!s_thread_br_init) {
         ESP_LOGI(TAG, "Thread border router not running");
         return ESP_ERR_INVALID_STATE;

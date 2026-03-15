@@ -2,6 +2,7 @@
 #include "device_manager.h"
 #include "matter_commission.h"
 #include "matter_device_control.h"
+#include "matter_init.h"
 
 #include "bsp_lvgl.h"
 #include "esp_log.h"
@@ -260,6 +261,16 @@ static void event_timer_cb(lv_timer_t *timer) {
                 } else {
                     lv_label_set_text(dashboard_status_label,
                         "Commissioner ready");
+                }
+            }
+            if (!matter_thread_available() && dashboard_thread_btn) {
+                lv_obj_add_state(dashboard_thread_btn,
+                    LV_STATE_DISABLED);
+                lv_obj_t *lbl = lv_obj_get_child(
+                    dashboard_thread_btn, 0);
+                if (lbl) {
+                    lv_label_set_text(lbl,
+                        LV_SYMBOL_CLOSE " No Thread Radio");
                 }
             }
             break;

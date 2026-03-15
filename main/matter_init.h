@@ -33,6 +33,7 @@ typedef void (*matter_event_cb_t)(matter_event_t event);
 
 esp_err_t matter_init(matter_event_cb_t cb);
 
+bool matter_thread_available(void);
 esp_err_t matter_start_thread_br(void);
 esp_err_t matter_stop_thread_br(void);
 
