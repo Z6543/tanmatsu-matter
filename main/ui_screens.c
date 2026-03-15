@@ -572,7 +572,12 @@ static void btn_start_commission_cb(lv_event_t *e) {
 
     if (err != ESP_OK) {
         const char *msg = "Failed to start pairing";
-        if (commission_method == 5 && err == ESP_ERR_NOT_FOUND) {
+        if (err == ESP_ERR_INVALID_STATE &&
+            commission_method <= 3) {
+            msg = "WiFi not connected. Connect to WiFi first "
+                  "for on-network commissioning.";
+        } else if (commission_method == 5 &&
+                   err == ESP_ERR_NOT_FOUND) {
             msg = "No Thread dataset: border router has no active "
                   "network. Enter a dataset manually.";
         }

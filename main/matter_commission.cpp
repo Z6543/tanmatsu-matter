@@ -10,6 +10,7 @@
 #include <esp_timer.h>
 #include <esp_wifi.h>
 #include <mdns.h>
+#include <wifi_connection.h>
 #include <controller/CommissioningDelegate.h>
 #include <credentials/attestation_verifier/DeviceAttestationDelegate.h>
 #include <setup_payload/ManualSetupPayloadGenerator.h>
@@ -88,6 +89,25 @@ static esp_err_t check_idle_and_register() {
     }
     comm->RegisterPairingDelegate(
         &esp_matter::controller::pairing_command::get_instance());
+    return ESP_OK;
+}
+
+// Check that WiFi has an IP address. On-network commissioning
+// requires mDNS discovery which needs a working IP interface.
+static esp_err_t require_wifi_ip(void) {
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
+        "WIFI_STA_DEF");
+    if (!sta) {
+        ESP_LOGE(TAG, "WiFi STA netif not found");
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(sta, &ip) != ESP_OK ||
+        ip.ip.addr == 0) {
+        ESP_LOGE(TAG, "WiFi STA has no IP address, cannot "
+                 "discover devices on the network");
+        return ESP_ERR_INVALID_STATE;
+    }
     return ESP_OK;
 }
 
@@ -261,6 +281,7 @@ esp_err_t matter_commission_on_network(
     uint64_t node_id, uint32_t pincode) {
     ESP_LOGI(TAG, "Pairing on-network: node=0x%llx pin=%lu",
              (unsigned long long)node_id, (unsigned long)pincode);
+    ESP_RETURN_ON_ERROR(require_wifi_ip(), TAG, "No network");
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     inject_attestation_delegate();
     esp_err_t err = esp_matter::controller::pairing_on_network(
@@ -279,6 +300,11 @@ esp_err_t matter_commission_disc_pass(
     ESP_LOGI(TAG, "Pairing disc+pass: node=0x%llx pin=%lu disc=%u "
              "hints=0x%02x", (unsigned long long)node_id,
              (unsigned long)pincode, discriminator, discovery_hints);
+
+    if (discovery_hints & DISC_HINT_ON_NET) {
+        ESP_RETURN_ON_ERROR(
+            require_wifi_ip(), TAG, "No network");
+    }
 
     chip::SetupPayload payload;
     payload.setUpPINCode = pincode;
@@ -334,6 +360,13 @@ esp_err_t matter_commission_setup_code(
             hints = DISC_HINT_ON_NET;
             ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x", hints);
         }
+    }
+
+    // On-network discovery requires a working WiFi connection.
+    // Fail fast instead of waiting 90s for DNS-SD to time out.
+    if (hints & DISC_HINT_ON_NET) {
+        ESP_RETURN_ON_ERROR(
+            require_wifi_ip(), TAG, "No network");
     }
 
     diag_mdns_browse();
