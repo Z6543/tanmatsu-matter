@@ -234,11 +234,19 @@ static void event_timer_cb(lv_timer_t *timer) {
     matter_event_t ev;
     while (xQueueReceive(s_ui_event_queue, &ev, 0) == pdTRUE) {
         switch (ev.type) {
-        case MATTER_EVENT_STACK_READY:
+        case MATTER_EVENT_STACK_READY: {
+            int dev_count = device_manager_count();
             if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label, "Commissioner ready");
+                if (dev_count > 0) {
+                    lv_label_set_text(dashboard_status_label,
+                        "Reconnecting to devices...");
+                } else {
+                    lv_label_set_text(dashboard_status_label,
+                        "Commissioner ready");
+                }
             }
             break;
+        }
         case MATTER_EVENT_PASE_SUCCESS:
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label,
@@ -298,14 +306,14 @@ static void event_timer_cb(lv_timer_t *timer) {
                     "Commissioning continues but device\n"
                     "may not be officially certified.");
                 lv_obj_set_style_text_color(commission_status_label,
-                    lv_color_hex(0xFFA000), 0);
+                    lv_color_hex(0xFFFFFF), 0);
             }
             break;
         case MATTER_EVENT_THREAD_BR_ERROR:
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label, ev.msg);
                 lv_obj_set_style_text_color(dashboard_status_label,
-                    lv_color_hex(0xFF4444), 0);
+                    lv_color_hex(0xFFFFFF), 0);
             }
             break;
         }
@@ -887,8 +895,6 @@ static void create_dashboard_screen(void) {
     hint_add_text(dash_hints, "Details");
     hint_add_icon(dash_hints, &img_dsc_f2);
     hint_add_text(dash_hints, "Force Remove");
-    hint_add_icon(dash_hints, &img_dsc_f3);
-    hint_add_text(dash_hints, "Screenshot");
 }
 
 static void refresh_dashboard(void) {
@@ -921,14 +927,14 @@ static void refresh_dashboard(void) {
 
         if (!dev->reachable) {
             lv_obj_set_style_bg_color(card, lv_color_hex(0x303030), 0);
-            lv_obj_set_style_text_color(card, lv_color_hex(0x777777), 0);
+            lv_obj_set_style_text_color(card, lv_color_hex(0xFFFFFF), 0);
             lv_obj_set_style_bg_opa(card, LV_OPA_70, 0);
         } else if (dev->on_off) {
             lv_obj_set_style_bg_color(card, lv_color_hex(0x2E7D32), 0);
             lv_obj_set_style_text_color(card, lv_color_hex(0xFFFFFF), 0);
         } else {
             lv_obj_set_style_bg_color(card, lv_color_hex(0x424242), 0);
-            lv_obj_set_style_text_color(card, lv_color_hex(0xCCCCCC), 0);
+            lv_obj_set_style_text_color(card, lv_color_hex(0xFFFFFF), 0);
         }
 
         lv_obj_t *name_lbl = lv_label_create(card);
@@ -1250,6 +1256,26 @@ void ui_post_event(matter_event_t event) {
 
 void ui_update_device_state(uint64_t node_id, bool on_off) {
     refresh_dashboard();
+
+    // Update dashboard status with connection progress
+    if (dashboard_status_label) {
+        int total = device_manager_count();
+        int reachable = 0;
+        for (int i = 0; i < total; i++) {
+            const matter_device_t *d = device_manager_get(i);
+            if (d && d->reachable) reachable++;
+        }
+        if (reachable >= total) {
+            lv_label_set_text(dashboard_status_label,
+                "Commissioner ready");
+        } else {
+            char buf[48];
+            snprintf(buf, sizeof(buf),
+                "Reconnecting to devices... (%d/%d)",
+                reachable, total);
+            lv_label_set_text(dashboard_status_label, buf);
+        }
+    }
 
     // Update detail screen if showing this device
     if (detail_node_id == node_id && lv_screen_active() == scr_detail) {
