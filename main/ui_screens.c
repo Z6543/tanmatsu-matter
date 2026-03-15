@@ -193,6 +193,7 @@ static void show_confirm_dialog(
 
     lv_obj_t *msg = lv_label_create(confirm_dialog);
     lv_label_set_text(msg, message);
+    lv_obj_set_style_text_color(msg, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(msg, LV_PCT(100));
     lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
