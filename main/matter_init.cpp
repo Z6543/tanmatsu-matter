@@ -18,6 +18,8 @@
 #include <esp_ot_config.h>
 #include <mdns.h>
 #include <openthread/dataset.h>
+#include <openthread/ip6.h>
+#include <openthread/thread.h>
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
 
@@ -262,6 +264,37 @@ esp_err_t matter_start_thread_br(void) {
 
     init_thread_border_router();
     return s_thread_br_init ? ESP_OK : ESP_FAIL;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t matter_stop_thread_br(void) {
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    if (!s_thread_br_init) {
+        ESP_LOGI(TAG, "Thread border router not running");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Stopping Thread border router");
+
+    esp_openthread_lock_acquire(portMAX_DELAY);
+
+    otInstance *instance = esp_openthread_get_instance();
+    otThreadSetEnabled(instance, false);
+    otIp6SetEnabled(instance, false);
+
+    esp_err_t err = esp_openthread_border_router_deinit();
+    esp_openthread_lock_release();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Border router deinit failed: %d", err);
+        return err;
+    }
+
+    s_thread_br_init = false;
+    ESP_LOGI(TAG, "Thread border router stopped");
+    return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;
 #endif

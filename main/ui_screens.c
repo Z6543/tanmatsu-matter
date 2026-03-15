@@ -233,6 +233,18 @@ static void show_confirm_dialog(
     lv_group_focus_obj(no_btn);
 }
 
+// ---- Thread button state ----
+static bool s_thread_running = false;
+
+static void update_thread_btn_label(void) {
+    if (!dashboard_thread_btn) return;
+    lv_obj_t *lbl = lv_obj_get_child(dashboard_thread_btn, 0);
+    if (!lbl) return;
+    lv_label_set_text(lbl, s_thread_running
+        ? LV_SYMBOL_CLOSE " Stop Thread"
+        : LV_SYMBOL_REFRESH " Start Thread");
+}
+
 // ---- Event queue timer callback ----
 static void event_timer_cb(lv_timer_t *timer) {
     (void)timer;
@@ -320,50 +332,62 @@ static void event_timer_cb(lv_timer_t *timer) {
                 lv_obj_set_style_text_color(dashboard_status_label,
                     lv_color_hex(0xFFFFFF), 0);
             }
-            if (dashboard_thread_btn) {
-                lv_obj_clear_state(dashboard_thread_btn,
-                    LV_STATE_DISABLED);
-                lv_obj_t *lbl = lv_obj_get_child(
-                    dashboard_thread_btn, 0);
-                if (lbl) lv_label_set_text(lbl,
-                    LV_SYMBOL_REFRESH " Start Thread");
-            }
+            s_thread_running = false;
+            update_thread_btn_label();
             break;
         }
     }
 }
 
 // ---- Navigation callbacks ----
-static void btn_start_thread_cb(lv_event_t *e) {
+static void btn_thread_toggle_cb(lv_event_t *e) {
     (void)e;
-    if (dashboard_status_label) {
-        lv_label_set_text(dashboard_status_label,
-            "Starting Thread border router...");
-        lv_obj_set_style_text_color(dashboard_status_label,
-            lv_color_hex(0x888888), 0);
-    }
-    esp_err_t err = matter_start_thread_br();
-    if (err == ESP_OK) {
-        if (dashboard_thread_btn) {
-            lv_obj_t *lbl = lv_obj_get_child(
-                dashboard_thread_btn, 0);
-            if (lbl) lv_label_set_text(lbl, "Thread: ON");
-            lv_obj_add_state(dashboard_thread_btn,
-                LV_STATE_DISABLED);
-        }
+    if (s_thread_running) {
         if (dashboard_status_label) {
             lv_label_set_text(dashboard_status_label,
-                "Thread border router started");
+                "Stopping Thread border router...");
+            lv_obj_set_style_text_color(dashboard_status_label,
+                lv_color_hex(0x888888), 0);
         }
-    } else if (err == ESP_ERR_INVALID_STATE) {
-        if (dashboard_status_label) {
-            lv_label_set_text(dashboard_status_label,
-                "WiFi not connected. Connect first.");
+        esp_err_t err = matter_stop_thread_br();
+        if (err == ESP_OK) {
+            s_thread_running = false;
+            update_thread_btn_label();
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Thread border router stopped");
+            }
+        } else {
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Failed to stop Thread border router");
+            }
         }
     } else {
         if (dashboard_status_label) {
             lv_label_set_text(dashboard_status_label,
-                "Thread border router failed to start");
+                "Starting Thread border router...");
+            lv_obj_set_style_text_color(dashboard_status_label,
+                lv_color_hex(0x888888), 0);
+        }
+        esp_err_t err = matter_start_thread_br();
+        if (err == ESP_OK) {
+            s_thread_running = true;
+            update_thread_btn_label();
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Thread border router started");
+            }
+        } else if (err == ESP_ERR_INVALID_STATE) {
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "WiFi not connected. Connect first.");
+            }
+        } else {
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Thread border router failed to start");
+            }
         }
     }
 }
@@ -928,7 +952,7 @@ static void create_dashboard_screen(void) {
     lv_obj_t *thread_lbl = lv_label_create(dashboard_thread_btn);
     lv_label_set_text(thread_lbl, LV_SYMBOL_REFRESH " Start Thread");
     lv_obj_add_event_cb(dashboard_thread_btn,
-        btn_start_thread_cb, LV_EVENT_CLICKED, NULL);
+        btn_thread_toggle_cb, LV_EVENT_CLICKED, NULL);
     apply_focus_style(dashboard_thread_btn);
     lv_group_add_obj(grp_dashboard, dashboard_thread_btn);
 
