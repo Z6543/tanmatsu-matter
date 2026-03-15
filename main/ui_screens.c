@@ -36,6 +36,10 @@ static lv_group_t *grp_detail = NULL;
 // Dashboard widgets
 static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
+static lv_obj_t *dashboard_thread_btn = NULL;
+
+// Number of fixed header buttons in grp_dashboard (Thread + Add)
+#define DASHBOARD_HEADER_BTNS 2
 
 // Commission widgets
 #define NUM_COMMISSION_METHODS 6
@@ -315,12 +319,54 @@ static void event_timer_cb(lv_timer_t *timer) {
                 lv_obj_set_style_text_color(dashboard_status_label,
                     lv_color_hex(0xFFFFFF), 0);
             }
+            if (dashboard_thread_btn) {
+                lv_obj_clear_state(dashboard_thread_btn,
+                    LV_STATE_DISABLED);
+                lv_obj_t *lbl = lv_obj_get_child(
+                    dashboard_thread_btn, 0);
+                if (lbl) lv_label_set_text(lbl,
+                    LV_SYMBOL_REFRESH " Start Thread");
+            }
             break;
         }
     }
 }
 
 // ---- Navigation callbacks ----
+static void btn_start_thread_cb(lv_event_t *e) {
+    (void)e;
+    if (dashboard_status_label) {
+        lv_label_set_text(dashboard_status_label,
+            "Starting Thread border router...");
+        lv_obj_set_style_text_color(dashboard_status_label,
+            lv_color_hex(0x888888), 0);
+    }
+    esp_err_t err = matter_start_thread_br();
+    if (err == ESP_OK) {
+        if (dashboard_thread_btn) {
+            lv_obj_t *lbl = lv_obj_get_child(
+                dashboard_thread_btn, 0);
+            if (lbl) lv_label_set_text(lbl, "Thread: ON");
+            lv_obj_add_state(dashboard_thread_btn,
+                LV_STATE_DISABLED);
+        }
+        if (dashboard_status_label) {
+            lv_label_set_text(dashboard_status_label,
+                "Thread border router started");
+        }
+    } else if (err == ESP_ERR_INVALID_STATE) {
+        if (dashboard_status_label) {
+            lv_label_set_text(dashboard_status_label,
+                "WiFi not connected. Connect first.");
+        }
+    } else {
+        if (dashboard_status_label) {
+            lv_label_set_text(dashboard_status_label,
+                "Thread border router failed to start");
+        }
+    }
+}
+
 static void btn_add_cb(lv_event_t *e) {
     (void)e;
     if (commission_status_label) lv_label_set_text(commission_status_label, "");
@@ -858,16 +904,27 @@ static void create_dashboard_screen(void) {
     lv_obj_set_flex_flow(scr_dashboard, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(scr_dashboard, 4, 0);
 
-    // Header with Add button
+    // Header with Start Thread and Add buttons
     lv_obj_t *header = lv_obj_create(scr_dashboard);
     lv_obj_set_size(header, LV_PCT(100), 40);
     lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_all(header, 4, 0);
+    lv_obj_set_style_pad_gap(header, 8, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, LV_SYMBOL_HOME " Matter Commissioner");
+    lv_obj_set_flex_grow(title, 1);
+
+    dashboard_thread_btn = lv_button_create(header);
+    lv_obj_t *thread_lbl = lv_label_create(dashboard_thread_btn);
+    lv_label_set_text(thread_lbl, LV_SYMBOL_REFRESH " Start Thread");
+    lv_obj_add_event_cb(dashboard_thread_btn,
+        btn_start_thread_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(dashboard_thread_btn);
+    lv_group_add_obj(grp_dashboard, dashboard_thread_btn);
 
     lv_obj_t *add_btn = lv_button_create(header);
     lv_obj_t *add_lbl = lv_label_create(add_btn);
@@ -901,17 +958,22 @@ static void refresh_dashboard(void) {
     if (!dashboard_container) return;
     lv_obj_clean(dashboard_container);
 
-    // Remove all card objects from group (keep the Add button which is first)
-    while (lv_group_get_obj_count(grp_dashboard) > 1) {
-        lv_obj_t *last = lv_group_get_obj_by_index(grp_dashboard, lv_group_get_obj_count(grp_dashboard) - 1);
+    // Remove all card objects from group (keep header buttons)
+    while (lv_group_get_obj_count(grp_dashboard) > DASHBOARD_HEADER_BTNS) {
+        lv_obj_t *last = lv_group_get_obj_by_index(
+            grp_dashboard,
+            lv_group_get_obj_count(grp_dashboard) - 1);
         lv_group_remove_obj(last);
     }
 
     int count = device_manager_count();
     if (count == 0) {
         lv_obj_t *lbl = lv_label_create(dashboard_container);
-        lv_label_set_text(lbl, "No devices.\nSelect '" LV_SYMBOL_PLUS " Add' to commission.");
-        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 0));
+        lv_label_set_text(lbl,
+            "No devices.\n"
+            "Select '" LV_SYMBOL_PLUS " Add' to commission.");
+        lv_group_focus_obj(lv_group_get_obj_by_index(
+            grp_dashboard, 0));
         return;
     }
 
@@ -965,11 +1027,13 @@ static void refresh_dashboard(void) {
         lv_group_add_obj(grp_dashboard, card);
     }
 
-    // Focus first device card if available, otherwise the Add button
-    if (lv_group_get_obj_count(grp_dashboard) > 1) {
-        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 1));
+    // Focus first device card if available, otherwise first header button
+    if (lv_group_get_obj_count(grp_dashboard) > DASHBOARD_HEADER_BTNS) {
+        lv_group_focus_obj(lv_group_get_obj_by_index(
+            grp_dashboard, DASHBOARD_HEADER_BTNS));
     } else {
-        lv_group_focus_obj(lv_group_get_obj_by_index(grp_dashboard, 0));
+        lv_group_focus_obj(lv_group_get_obj_by_index(
+            grp_dashboard, 0));
     }
 }
 

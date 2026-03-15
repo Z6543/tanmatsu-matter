@@ -31,6 +31,9 @@ static QueueHandle_t                input_event_queue = NULL;
 
 static void on_matter_event(matter_event_t event) {
     ui_post_event(event);
+    if (event.type == MATTER_EVENT_STACK_READY) {
+        matter_device_subscribe_all();
+    }
 }
 
 static void on_device_state_changed(uint64_t node_id, bool on_off) {
@@ -98,7 +101,6 @@ void app_main(void) {
     matter_init(on_matter_event);
 
     matter_device_set_state_cb(on_device_state_changed);
-    matter_device_subscribe_all();
 
     // Re-subscribe to all devices when WiFi reconnects (CASE sessions
     // are lost on disconnect, so subscriptions must be re-established).

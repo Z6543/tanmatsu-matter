@@ -131,14 +131,6 @@ static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr
     case chip::DeviceLayer::DeviceEventType::PublicEventTypes::kInterfaceIpAddressChanged:
         ESP_LOGI(TAG, "Interface IP Address changed");
         break;
-#if CONFIG_OPENTHREAD_BORDER_ROUTER
-    case chip::DeviceLayer::DeviceEventType::kESPSystemEvent:
-        if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
-            event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP) {
-            init_thread_border_router();
-        }
-        break;
-#endif
     default:
         break;
     }
@@ -180,20 +172,6 @@ esp_err_t matter_init(matter_event_cb_t cb) {
         return err;
     }
     ESP_LOGI(TAG, "Matter stack started");
-
-#if CONFIG_OPENTHREAD_BORDER_ROUTER
-    // WiFi may already have an IP if connected before Matter started.
-    // The IP_EVENT_STA_GOT_IP event won't be re-delivered, so check now.
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (sta) {
-        esp_netif_ip_info_t ip_info;
-        if (esp_netif_get_ip_info(sta, &ip_info) == ESP_OK &&
-            ip_info.ip.addr != 0) {
-            ESP_LOGI(TAG, "WiFi already has IP, initializing BR now");
-            init_thread_border_router();
-        }
-    }
-#endif
 
     {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
@@ -258,6 +236,33 @@ esp_err_t matter_get_thread_active_dataset_hex(
 #else
     (void)out;
     (void)out_len;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t matter_start_thread_br(void) {
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    if (s_thread_br_init) {
+        ESP_LOGI(TAG, "Thread border router already running");
+        return ESP_OK;
+    }
+
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
+        "WIFI_STA_DEF");
+    if (!sta) {
+        ESP_LOGE(TAG, "WiFi STA netif not found");
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(sta, &ip_info) != ESP_OK ||
+        ip_info.ip.addr == 0) {
+        ESP_LOGE(TAG, "WiFi not connected, cannot start BR");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    init_thread_border_router();
+    return s_thread_br_init ? ESP_OK : ESP_FAIL;
+#else
     return ESP_ERR_NOT_SUPPORTED;
 #endif
 }

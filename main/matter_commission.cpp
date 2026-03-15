@@ -6,8 +6,10 @@
 #include <esp_matter.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_pairing_command.h>
+#include <esp_netif.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
+#include <mdns.h>
 #include <controller/CommissioningDelegate.h>
 #include <credentials/attestation_verifier/DeviceAttestationDelegate.h>
 #include <setup_payload/ManualSetupPayloadGenerator.h>
@@ -154,7 +156,12 @@ static void commission_timeout_cb(void *arg) {
 
     {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-        get_commissioner()->StopPairing(node_id);
+        auto *comm = get_commissioner();
+        comm->StopPairing(node_id);
+        // StopPairing does not invoke the pairing delegate callback, so
+        // the delegate stays registered and blocks the next commission.
+        // Unregister it explicitly so check_idle_and_register() succeeds.
+        comm->RegisterPairingDelegate(nullptr);
     }
 
     matter_event_t ev = {};
@@ -179,6 +186,73 @@ void matter_commission_cancel_timeout(void) {
     if (s_timeout_timer) {
         esp_timer_stop(s_timeout_timer);
     }
+}
+
+// --- mDNS diagnostics ---
+
+static void diag_mdns_browse(void) {
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
+        "WIFI_STA_DEF");
+    if (!sta) {
+        ESP_LOGW(TAG, "DIAG: WiFi STA netif not found");
+        return;
+    }
+    esp_netif_ip_info_t ip;
+    if (esp_netif_get_ip_info(sta, &ip) != ESP_OK ||
+        ip.ip.addr == 0) {
+        ESP_LOGW(TAG, "DIAG: WiFi STA has no IP address");
+        return;
+    }
+    ESP_LOGI(TAG, "DIAG: WiFi STA IP=" IPSTR, IP2STR(&ip.ip));
+
+    // Synchronous mDNS browse for commissionable devices
+    mdns_result_t *results = nullptr;
+    ESP_LOGI(TAG, "DIAG: mDNS query _matterc._udp (5s)...");
+    esp_err_t err = mdns_query_ptr(
+        "_matterc", "_udp", 5000, 20, &results);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "DIAG: mdns_query_ptr failed: %d", err);
+    }
+    int count = 0;
+    for (mdns_result_t *r = results; r; r = r->next) {
+        ESP_LOGI(TAG, "DIAG: found [%d] instance=%s host=%s "
+                 "port=%u",
+                 count, r->instance_name ? r->instance_name : "?",
+                 r->hostname ? r->hostname : "?", r->port);
+        for (mdns_ip_addr_t *a = r->addr; a; a = a->next) {
+            if (a->addr.type == ESP_IPADDR_TYPE_V4) {
+                ESP_LOGI(TAG, "DIAG:   addr=" IPSTR,
+                         IP2STR(&a->addr.u_addr.ip4));
+            } else {
+                ESP_LOGI(TAG, "DIAG:   addr=" IPV6STR,
+                         IPV62STR(a->addr.u_addr.ip6));
+            }
+        }
+        count++;
+    }
+    if (count == 0) {
+        ESP_LOGW(TAG, "DIAG: no _matterc._udp services found "
+                 "via mDNS");
+    }
+    mdns_query_results_free(results);
+
+    // Check delegated services (registered via border router
+    // SRP proxy from Thread devices)
+    mdns_result_t *delegated = nullptr;
+    mdns_lookup_delegated_service(
+        nullptr, "_matterc", "_udp", 20, &delegated);
+    count = 0;
+    for (mdns_result_t *r = delegated; r; r = r->next) {
+        ESP_LOGI(TAG, "DIAG: delegated [%d] instance=%s "
+                 "host=%s port=%u",
+                 count, r->instance_name ? r->instance_name : "?",
+                 r->hostname ? r->hostname : "?", r->port);
+        count++;
+    }
+    if (count == 0) {
+        ESP_LOGI(TAG, "DIAG: no delegated _matterc services");
+    }
+    mdns_query_results_free(delegated);
 }
 
 // --- Public API ---
@@ -252,15 +326,17 @@ esp_err_t matter_commission_setup_code(
             ESP_LOGI(TAG, "QR code parsed: hints=0x%02x", hints);
         }
     } else {
-        // Manual numeric codes never encode rendezvous info, so
-        // always try BLE + on-network to support uncommissioned
-        // BLE+WiFi devices.
+        // Manual numeric codes never encode rendezvous info; use
+        // on-network discovery only. BLE commissioning has dedicated
+        // commission methods (BLE+WiFi, BLE+Thread).
         chip::ManualSetupPayloadParser manual_parser(code);
         if (manual_parser.populatePayload(payload) == CHIP_NO_ERROR) {
-            hints = DISC_HINT_BLE | DISC_HINT_ON_NET;
+            hints = DISC_HINT_ON_NET;
             ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x", hints);
         }
     }
+
+    diag_mdns_browse();
 
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");

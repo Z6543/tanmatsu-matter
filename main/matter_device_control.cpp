@@ -69,6 +69,9 @@ static void on_subscribe_done(uint64_t remote_node_id, uint32_t subscription_id)
     matter_device_t *dev = device_manager_find_mut(remote_node_id);
     if (dev) {
         dev->reachable = true;
+        if (s_state_cb) {
+            s_state_cb(remote_node_id, dev->on_off);
+        }
     }
 }
 
