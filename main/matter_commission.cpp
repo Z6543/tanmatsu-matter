@@ -111,6 +111,28 @@ static esp_err_t require_wifi_ip(void) {
     return ESP_OK;
 }
 
+static int hex_char_to_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int hex_to_bytes(
+    const char *hex, uint8_t *out, size_t out_len) {
+    size_t hex_len = strlen(hex);
+    if (hex_len % 2 != 0) return -1;
+    size_t byte_len = hex_len / 2;
+    if (byte_len > out_len) return -1;
+    for (size_t i = 0; i < byte_len; i++) {
+        int hi = hex_char_to_nibble(hex[i * 2]);
+        int lo = hex_char_to_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return (int)byte_len;
+}
+
 // Determine if discovery hints indicate BLE or SoftAP transport
 static bool hints_need_wifi_creds(uint8_t hints) {
     return (hints & DISC_HINT_BLE) || (hints & DISC_HINT_SOFTAP);
@@ -121,8 +143,13 @@ static DiscoveryType hints_to_discovery_type(uint8_t hints) {
     return DiscoveryType::kDiscoveryNetworkOnly;
 }
 
+// Thread dataset buffer shared between build_params and caller
+// (must remain valid through PairDevice call).
+static uint8_t s_thread_dataset_buf[254];
+static int s_thread_dataset_len = 0;
+
 // Build CommissioningParameters with attestation delegate and
-// optionally WiFi credentials based on discovery hints.
+// optionally WiFi/Thread credentials based on discovery hints.
 static esp_err_t build_params(
     CommissioningParameters &params, uint8_t hints) {
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
@@ -143,6 +170,30 @@ static esp_err_t build_params(
         params.SetWiFiCredentials(
             chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
     }
+
+    // When BLE discovery is enabled, also provide Thread
+    // credentials so the auto-commissioner can provision Thread
+    // devices discovered via BLE.
+    if (hints & DISC_HINT_BLE) {
+        char hex_buf[509];
+        if (matter_get_thread_active_dataset_hex(
+                hex_buf, sizeof(hex_buf)) == ESP_OK) {
+            s_thread_dataset_len = hex_to_bytes(
+                hex_buf, s_thread_dataset_buf,
+                sizeof(s_thread_dataset_buf));
+            if (s_thread_dataset_len > 0) {
+                params.SetThreadOperationalDataset(chip::ByteSpan(
+                    s_thread_dataset_buf, s_thread_dataset_len));
+                ESP_LOGI(TAG, "Thread dataset attached for "
+                         "BLE commissioning (%d bytes)",
+                         s_thread_dataset_len);
+            }
+        } else {
+            ESP_LOGW(TAG, "No Thread dataset from border router; "
+                     "Thread devices may fail commissioning");
+        }
+    }
+
     return ESP_OK;
 }
 
@@ -352,24 +403,34 @@ esp_err_t matter_commission_setup_code(
             ESP_LOGI(TAG, "QR code parsed: hints=0x%02x", hints);
         }
     } else {
-        // Manual numeric codes never encode rendezvous info; use
-        // on-network discovery only. BLE commissioning has dedicated
-        // commission methods (BLE+WiFi, BLE+Thread).
+        // Manual numeric codes don't encode rendezvous info.
+        // Try BLE in addition to on-network so we can commission
+        // Thread devices that aren't reachable via mDNS.
         chip::ManualSetupPayloadParser manual_parser(code);
         if (manual_parser.populatePayload(payload) == CHIP_NO_ERROR) {
-            hints = DISC_HINT_ON_NET;
-            ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x", hints);
+            hints = DISC_HINT_BLE | DISC_HINT_ON_NET;
+            ESP_LOGI(TAG, "Manual code parsed: hints=0x%02x "
+                     "(BLE+on-network)", hints);
         }
     }
 
     // On-network discovery requires a working WiFi connection.
-    // Fail fast instead of waiting 90s for DNS-SD to time out.
+    // When BLE is also available, degrade gracefully to BLE-only.
     if (hints & DISC_HINT_ON_NET) {
-        ESP_RETURN_ON_ERROR(
-            require_wifi_ip(), TAG, "No network");
+        if (require_wifi_ip() != ESP_OK) {
+            if (hints & DISC_HINT_BLE) {
+                hints &= ~DISC_HINT_ON_NET;
+                ESP_LOGW(TAG, "No WiFi IP, using BLE-only discovery");
+            } else {
+                ESP_LOGE(TAG, "No WiFi IP for on-network discovery");
+                return ESP_ERR_INVALID_STATE;
+            }
+        }
     }
 
-    diag_mdns_browse();
+    if (hints & DISC_HINT_ON_NET) {
+        diag_mdns_browse();
+    }
 
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
@@ -414,28 +475,6 @@ esp_err_t matter_commission_ble_wifi(
     get_commissioner()->PairDevice(node_id, rendezvous, params);
     start_commission_timeout(node_id);
     return ESP_OK;
-}
-
-static int hex_char_to_nibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-static int hex_to_bytes(
-    const char *hex, uint8_t *out, size_t out_len) {
-    size_t hex_len = strlen(hex);
-    if (hex_len % 2 != 0) return -1;
-    size_t byte_len = hex_len / 2;
-    if (byte_len > out_len) return -1;
-    for (size_t i = 0; i < byte_len; i++) {
-        int hi = hex_char_to_nibble(hex[i * 2]);
-        int lo = hex_char_to_nibble(hex[i * 2 + 1]);
-        if (hi < 0 || lo < 0) return -1;
-        out[i] = (uint8_t)((hi << 4) | lo);
-    }
-    return (int)byte_len;
 }
 
 esp_err_t matter_commission_ble_thread(
