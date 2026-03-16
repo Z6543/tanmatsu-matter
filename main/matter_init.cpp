@@ -69,9 +69,56 @@ static void on_commissioning_failure(
 static bool s_thread_available = false;
 static bool s_thread_br_init = false;
 
-// Probe the RCP co-processor over UART by sending a Spinel HDLC
-// NOOP frame and waiting for any response. Returns true if the
-// RCP responds within the timeout.
+// Build an HDLC-encoded Spinel frame. Returns frame length.
+static int build_hdlc_frame(
+    const uint8_t *data, int data_len,
+    uint8_t *out, int out_len) {
+
+    uint16_t crc = 0xFFFF;
+    for (int i = 0; i < data_len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 1) ? (crc >> 1) ^ 0x8408
+                            : crc >> 1;
+        }
+    }
+    crc = ~crc;
+
+    int pos = 0;
+    if (pos >= out_len) return -1;
+    out[pos++] = 0x7E;
+    for (int i = 0; i < data_len; i++) {
+        uint8_t byte = data[i];
+        if (byte == 0x7E || byte == 0x7D) {
+            if (pos + 1 >= out_len) return -1;
+            out[pos++] = 0x7D;
+            out[pos++] = byte ^ 0x20;
+        } else {
+            if (pos >= out_len) return -1;
+            out[pos++] = byte;
+        }
+    }
+    for (int f = 0; f < 2; f++) {
+        uint8_t byte = (f == 0) ? (uint8_t)(crc & 0xFF)
+                                : (uint8_t)(crc >> 8);
+        if (byte == 0x7E || byte == 0x7D) {
+            if (pos + 1 >= out_len) return -1;
+            out[pos++] = 0x7D;
+            out[pos++] = byte ^ 0x20;
+        } else {
+            if (pos >= out_len) return -1;
+            out[pos++] = byte;
+        }
+    }
+    if (pos >= out_len) return -1;
+    out[pos++] = 0x7E;
+    return pos;
+}
+
+// Probe the RCP co-processor over UART by sending a Spinel
+// PROP_VALUE_GET for PROTOCOL_VERSION and checking for a
+// response. NOOP (0x00) is intentionally ignored by the RCP,
+// so we must use a real query. Retries up to 3 times.
 static bool probe_rcp_uart(void) {
     const uart_port_t port = UART_NUM_1;
     uart_config_t cfg = {
@@ -93,40 +140,32 @@ static bool probe_rcp_uart(void) {
     uart_param_config(port, &cfg);
     uart_set_pin(port, GPIO_NUM_53, GPIO_NUM_54,
                  UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_flush_input(port);
 
-    // Spinel NOOP: header=0x80, cmd=0x00
-    // CRC-16/X.25 (HDLC FCS-16) over those two bytes
-    const uint8_t spinel[] = {0x80, 0x00};
-    uint16_t crc = 0xFFFF;
-    for (int i = 0; i < 2; i++) {
-        crc ^= spinel[i];
-        for (int b = 0; b < 8; b++) {
-            crc = (crc & 1) ? (crc >> 1) ^ 0x8408
-                            : crc >> 1;
+    // Spinel PROP_VALUE_GET(PROTOCOL_VERSION):
+    //   header=0x81 (TID=1), cmd=0x02, prop=0x01
+    const uint8_t spinel[] = {0x81, 0x02, 0x01};
+    uint8_t frame[16];
+    int frame_len = build_hdlc_frame(
+        spinel, sizeof(spinel), frame, sizeof(frame));
+
+    bool found = false;
+    for (int attempt = 0; attempt < 3 && !found; attempt++) {
+        uart_flush_input(port);
+        uart_write_bytes(port, frame, frame_len);
+        uart_wait_tx_done(port, pdMS_TO_TICKS(100));
+
+        uint8_t buf[64];
+        int len = uart_read_bytes(
+            port, buf, sizeof(buf), pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "RCP probe attempt %d: got %d bytes",
+                 attempt + 1, len);
+        if (len > 0) {
+            found = true;
         }
     }
-    crc = ~crc;
 
-    // HDLC frame: flag + data + FCS(LE) + flag
-    // No bytes need escaping (none are 0x7E or 0x7D)
-    const uint8_t frame[] = {
-        0x7E,
-        spinel[0], spinel[1],
-        (uint8_t)(crc & 0xFF), (uint8_t)(crc >> 8),
-        0x7E,
-    };
-
-    uart_write_bytes(port, frame, sizeof(frame));
-    uart_wait_tx_done(port, pdMS_TO_TICKS(100));
-
-    uint8_t buf[64];
-    int len = uart_read_bytes(
-        port, buf, sizeof(buf), pdMS_TO_TICKS(1500));
     uart_driver_delete(port);
-
-    ESP_LOGI(TAG, "RCP probe: got %d bytes", len);
-    return len > 0;
+    return found;
 }
 
 static void post_thread_br_error(const char *message) {
