@@ -17,6 +17,7 @@
 #include "matter_commission.h"
 #include "matter_device_control.h"
 #include "matter_init.h"
+#include "sdcard.h"
 #include "ui_screens.h"
 
 static char const TAG[] = "main";
@@ -71,6 +72,13 @@ void app_main(void) {
 
     lvgl_init(display_h_res, display_v_res, display_color_format, display_lcd_panel, display_lcd_panel_io,
               input_event_queue);
+
+    // Mount SD card (optional, for screenshots)
+    esp_err_t sd_res = sdcard_init();
+    if (sd_res != ESP_OK) {
+        ESP_LOGW(TAG, "SD card not available: %s",
+                 esp_err_to_name(sd_res));
+    }
 
     ESP_LOGI(TAG, "Initializing device manager");
     device_manager_init();

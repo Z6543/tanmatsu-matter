@@ -5,20 +5,19 @@
 #include "matter_init.h"
 
 #include "bsp_lvgl.h"
+#include "sdcard.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "lvgl.h"
 #include "nvs.h"
 #include <stdlib.h>
-
-static const char *TAG = "ui";
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
 
 #if LV_USE_SNAPSHOT
 #include "esp_heap_caps.h"
-#include "mbedtls/base64.h"
-#include <stdio.h>
-#include <string.h>
 #endif
 
 // Event queue for Matter -> UI communication
@@ -977,42 +976,14 @@ static void apply_focus_style(lv_obj_t *obj) {
     lv_obj_set_style_border_opa(obj, LV_OPA_COVER, LV_STATE_FOCUSED | LV_STATE_CHECKED);
 }
 
-// ---- Screenshot (F3) ----
+// ---- Screenshot (F3) — save PPM to SD card ----
 #if LV_USE_SNAPSHOT
-static void write_le16(uint8_t *p, uint16_t v) {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-}
-
-static void write_le32(uint8_t *p, uint32_t v) {
-    p[0] = (uint8_t)(v);
-    p[1] = (uint8_t)(v >> 8);
-    p[2] = (uint8_t)(v >> 16);
-    p[3] = (uint8_t)(v >> 24);
-}
-
-#define B64_RAW_CHUNK 57
-#define B64_OUT_CHUNK 80
-
-static void b64_stream(
-    const uint8_t *data, uint32_t len, uint32_t *carry) {
-    (void)carry;
-    uint8_t out[B64_OUT_CHUNK];
-    size_t olen;
-    uint32_t off = 0;
-    while (off < len) {
-        uint32_t chunk = len - off;
-        if (chunk > B64_RAW_CHUNK) chunk = B64_RAW_CHUNK;
-        mbedtls_base64_encode(
-            out, sizeof(out), &olen,
-            data + off, chunk);
-        out[olen] = '\0';
-        printf("%s\n", (char *)out);
-        off += chunk;
-    }
-}
-
 static void take_screenshot(void) {
+    if (!sdcard_is_mounted()) {
+        ESP_LOGW(TAG, "Cannot save screenshot (SD not mounted)");
+        return;
+    }
+
     lv_obj_t *scr = lv_screen_active();
     if (!scr) return;
 
@@ -1028,53 +999,45 @@ static void take_screenshot(void) {
     uint32_t w = snap->header.w;
     uint32_t h = snap->header.h;
     uint32_t stride = snap->header.stride;
-    uint32_t row_bytes = w * 2;
-    uint32_t bmp_row = (row_bytes + 3) & ~3u;
-    uint32_t pixel_size = bmp_row * h;
-    uint32_t hdr_size = 14 + 40;
-    uint32_t file_size = hdr_size + pixel_size;
 
-    uint8_t *bmp = heap_caps_malloc(
-        file_size, MALLOC_CAP_SPIRAM);
-    if (!bmp) {
-        ESP_LOGE(TAG, "BMP alloc failed (%lu bytes)",
-                 (unsigned long)file_size);
+    time_t t = time(NULL);
+    struct tm *tm_info = localtime(&t);
+    char filename[64];
+    snprintf(filename, sizeof(filename),
+             "/sd/matter-%04d%02d%02d%02d%02d%02d.ppm",
+             tm_info->tm_year + 1900, tm_info->tm_mon + 1,
+             tm_info->tm_mday, tm_info->tm_hour,
+             tm_info->tm_min, tm_info->tm_sec);
+
+    FILE *f = fopen(filename, "wb");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open %s for writing", filename);
         lv_draw_buf_destroy(snap);
         return;
     }
 
-    memset(bmp, 0, hdr_size);
-    bmp[0] = 'B'; bmp[1] = 'M';
-    write_le32(&bmp[2], file_size);
-    write_le32(&bmp[10], hdr_size);
-    write_le32(&bmp[14], 40);
-    write_le32(&bmp[18], w);
-    write_le32(&bmp[22], h);
-    write_le16(&bmp[26], 1);
-    write_le16(&bmp[28], 16);
-    write_le32(&bmp[30], 0);
-    write_le32(&bmp[34], pixel_size);
+    fprintf(f, "P6\n%lu %lu\n255\n",
+            (unsigned long)w, (unsigned long)h);
 
-    uint32_t pad_bytes = bmp_row - row_bytes;
-    uint8_t *dst = bmp + hdr_size;
-    for (int y = (int)h - 1; y >= 0; y--) {
-        const uint8_t *src = snap->data + (y * stride);
-        memcpy(dst, src, row_bytes);
-        if (pad_bytes > 0)
-            memset(dst + row_bytes, 0, pad_bytes);
-        dst += bmp_row;
+    for (uint32_t y = 0; y < h; y++) {
+        const uint16_t *row =
+            (const uint16_t *)(snap->data + y * stride);
+        for (uint32_t x = 0; x < w; x++) {
+            uint16_t px = row[x];
+            // RGB565 to RGB888
+            uint8_t r = (uint8_t)(((px >> 11) & 0x1F) * 255 / 31);
+            uint8_t g = (uint8_t)(((px >> 5) & 0x3F) * 255 / 63);
+            uint8_t b = (uint8_t)((px & 0x1F) * 255 / 31);
+            fputc(r, f);
+            fputc(g, f);
+            fputc(b, f);
+        }
     }
 
+    fclose(f);
     lv_draw_buf_destroy(snap);
-
-    printf("\n===SCREENSHOT_START===\n");
-    b64_stream(bmp, file_size, NULL);
-    printf("===SCREENSHOT_END===\n");
-    fflush(stdout);
-
-    free(bmp);
-    ESP_LOGI(TAG, "Screenshot done (%lux%lu)",
-             (unsigned long)w, (unsigned long)h);
+    ESP_LOGI(TAG, "Screenshot saved: %s (%lux%lu)",
+             filename, (unsigned long)w, (unsigned long)h);
 }
 #endif
 

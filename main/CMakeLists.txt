@@ -2,6 +2,7 @@ idf_component_register(
 	SRCS
 		"main.c"
 		"device_manager.c"
+		"sdcard.c"
 		"ui_screens.c"
 		"matter_init.cpp"
 		"matter_commission.cpp"
@@ -16,6 +17,7 @@ idf_component_register(
 		esp_psram
 		esp_driver_ppa
 		fatfs
+		sdmmc
 		nvs_flash
 		badge-bsp
 		chip
