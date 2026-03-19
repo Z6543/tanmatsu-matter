@@ -36,9 +36,9 @@ static void on_matter_event(matter_event_t event) {
     }
 }
 
-static void on_device_state_changed(uint64_t node_id, bool on_off) {
+static void on_device_state_changed(uint64_t node_id) {
     lvgl_lock();
-    ui_update_device_state(node_id, on_off);
+    ui_update_device_state(node_id);
     lvgl_unlock();
 }
 

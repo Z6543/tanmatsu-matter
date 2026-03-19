@@ -11,6 +11,28 @@ static matter_device_t s_devices[MATTER_DEVICE_MAX];
 static int s_device_count = 0;
 static uint64_t s_next_node_id = 1;
 
+device_category_t device_type_to_category(uint32_t device_type_id) {
+    switch (device_type_id) {
+    case 0x0100: return DEVICE_CAT_ON_OFF_LIGHT;
+    case 0x0101: return DEVICE_CAT_DIMMABLE_LIGHT;
+    case 0x0102: return DEVICE_CAT_COLOR_TEMP_LIGHT;
+    case 0x010D: return DEVICE_CAT_COLOR_LIGHT;
+    case 0x010A: return DEVICE_CAT_ON_OFF_PLUG;
+    case 0x010B: return DEVICE_CAT_DIMMABLE_PLUG;
+    case 0x0301: return DEVICE_CAT_THERMOSTAT;
+    case 0x000A: return DEVICE_CAT_DOOR_LOCK;
+    case 0x0202: return DEVICE_CAT_WINDOW_COVERING;
+    case 0x0015: return DEVICE_CAT_CONTACT_SENSOR;
+    case 0x0302: return DEVICE_CAT_TEMP_SENSOR;
+    case 0x0307: return DEVICE_CAT_HUMIDITY_SENSOR;
+    case 0x0107: return DEVICE_CAT_OCCUPANCY_SENSOR;
+    case 0x0106: return DEVICE_CAT_LIGHT_SENSOR;
+    case 0x0103: return DEVICE_CAT_ON_OFF_SWITCH;
+    case 0x002B: return DEVICE_CAT_FAN;
+    default:     return DEVICE_CAT_UNKNOWN;
+    }
+}
+
 esp_err_t device_manager_init(void) {
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
@@ -28,8 +50,10 @@ esp_err_t device_manager_init(void) {
             snprintf(key, sizeof(key), "dev_%d", i);
             size_t len = sizeof(matter_device_t);
             err = nvs_get_blob(nvs, key, &s_devices[i], &len);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to load device %d", i);
+            if (err != ESP_OK || len != sizeof(matter_device_t)) {
+                ESP_LOGW(TAG, "Failed to load device %d (err=%d, "
+                         "len=%u vs %u)", i, err, (unsigned)len,
+                         (unsigned)sizeof(matter_device_t));
                 break;
             }
             s_devices[i].reachable = false;
@@ -43,7 +67,8 @@ esp_err_t device_manager_init(void) {
     }
 
     nvs_close(nvs);
-    ESP_LOGI(TAG, "Loaded %d devices, next node_id=%llu", s_device_count, (unsigned long long)s_next_node_id);
+    ESP_LOGI(TAG, "Loaded %d devices, next node_id=%llu",
+             s_device_count, (unsigned long long)s_next_node_id);
     return ESP_OK;
 }
 
@@ -75,7 +100,9 @@ matter_device_t *device_manager_find_mut(uint64_t node_id) {
     return NULL;
 }
 
-esp_err_t device_manager_add(uint64_t node_id, uint16_t endpoint_id, const char *name) {
+esp_err_t device_manager_add(
+    uint64_t node_id, uint16_t endpoint_id, const char *name,
+    uint32_t device_type_id) {
     if (s_device_count >= MATTER_DEVICE_MAX) {
         ESP_LOGW(TAG, "Device list full");
         return ESP_ERR_NO_MEM;
@@ -88,14 +115,20 @@ esp_err_t device_manager_add(uint64_t node_id, uint16_t endpoint_id, const char 
     memset(dev, 0, sizeof(*dev));
     dev->node_id = node_id;
     dev->endpoint_id = endpoint_id;
+    dev->device_type_id = device_type_id;
+    dev->category = device_type_to_category(device_type_id);
     dev->reachable = true;
     dev->on_off = false;
     if (name && name[0]) {
         strncpy(dev->name, name, MATTER_DEVICE_NAME_LEN - 1);
     } else {
-        snprintf(dev->name, MATTER_DEVICE_NAME_LEN, "Device %llu", (unsigned long long)node_id);
+        snprintf(dev->name, MATTER_DEVICE_NAME_LEN,
+                 "Device %llu", (unsigned long long)node_id);
     }
     s_device_count++;
+    ESP_LOGI(TAG, "Added device 0x%llx type=0x%04lx cat=%d",
+             (unsigned long long)node_id,
+             (unsigned long)device_type_id, dev->category);
     return device_manager_save();
 }
 
@@ -106,7 +139,8 @@ esp_err_t device_manager_remove(uint64_t node_id) {
                 s_devices[j] = s_devices[j + 1];
             }
             s_device_count--;
-            memset(&s_devices[s_device_count], 0, sizeof(matter_device_t));
+            memset(&s_devices[s_device_count], 0,
+                   sizeof(matter_device_t));
             return device_manager_save();
         }
     }
@@ -130,9 +164,9 @@ esp_err_t device_manager_save(void) {
     for (int i = 0; i < s_device_count; i++) {
         char key[8];
         snprintf(key, sizeof(key), "dev_%d", i);
-        nvs_set_blob(nvs, key, &s_devices[i], sizeof(matter_device_t));
+        nvs_set_blob(nvs, key, &s_devices[i],
+                     sizeof(matter_device_t));
     }
-    // Clean up old extra keys
     for (int i = s_device_count; i < MATTER_DEVICE_MAX; i++) {
         char key[8];
         snprintf(key, sizeof(key), "dev_%d", i);

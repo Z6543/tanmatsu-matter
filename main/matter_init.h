@@ -26,6 +26,7 @@ typedef struct {
     matter_event_type_t type;
     uint64_t            node_id;
     uint16_t            endpoint_id;
+    uint32_t            device_type_id;
     char                msg[MATTER_EVENT_MSG_LEN];
 } matter_event_t;
 
