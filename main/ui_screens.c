@@ -37,6 +37,8 @@ static lv_group_t *grp_detail = NULL;
 // Dashboard widgets
 static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
+static lv_obj_t *dashboard_status_row = NULL;
+static lv_obj_t *dashboard_spinner = NULL;
 static lv_obj_t *dashboard_thread_btn = NULL;
 
 // Number of fixed header buttons in grp_dashboard (Thread + Add)
@@ -56,6 +58,7 @@ static lv_obj_t *commission_thread_label = NULL;
 static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
+static lv_obj_t *commission_spinner = NULL;
 static lv_obj_t *commission_start_btn = NULL;
 static int       commission_method = 0;
 
@@ -100,6 +103,7 @@ static void refresh_dashboard(void);
 static void show_detail_for_device(uint64_t node_id);
 static void apply_focus_style(lv_obj_t *obj);
 static void activate_group(lv_group_t *grp);
+static void show_spinner(lv_obj_t *spinner, bool show);
 
 // ---- Helpers: category queries ----
 
@@ -397,9 +401,11 @@ static void event_timer_cb(lv_timer_t *timer) {
                 if (dev_count > 0) {
                     lv_label_set_text(dashboard_status_label,
                         "Reconnecting to devices...");
+                    show_spinner(dashboard_spinner, true);
                 } else {
                     lv_label_set_text(dashboard_status_label,
                         "Commissioner ready");
+                    show_spinner(dashboard_spinner, false);
                 }
             }
             if (!matter_thread_available() && dashboard_thread_btn) {
@@ -424,6 +430,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             break;
         case MATTER_EVENT_PASE_FAILED:
             s_commissioning_active = false;
+            show_spinner(commission_spinner, false);
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "PASE failed!");
             }
@@ -442,6 +449,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             const char *name = s_pending_name[0] ? s_pending_name
                                                  : ev.msg;
             uint16_t ep = ev.endpoint_id ? ev.endpoint_id : 1;
+            show_spinner(commission_spinner, false);
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "Success!");
             }
@@ -458,6 +466,7 @@ static void event_timer_cb(lv_timer_t *timer) {
         }
         case MATTER_EVENT_COMMISSION_FAILED:
             s_commissioning_active = false;
+            show_spinner(commission_spinner, false);
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label, "Commissioning failed!");
             }
@@ -465,6 +474,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             break;
         case MATTER_EVENT_COMMISSION_TIMEOUT:
             s_commissioning_active = false;
+            show_spinner(commission_spinner, false);
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label,
                     "Commissioning timed out (90s)");
@@ -482,6 +492,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             }
             break;
         case MATTER_EVENT_THREAD_BR_ERROR:
+            show_spinner(dashboard_spinner, false);
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label, ev.msg);
                 lv_obj_set_style_text_color(dashboard_status_label,
@@ -525,21 +536,25 @@ static void btn_thread_toggle_cb(lv_event_t *e) {
             lv_obj_set_style_text_color(dashboard_status_label,
                 lv_color_hex(0x888888), 0);
         }
+        show_spinner(dashboard_spinner, true);
         esp_err_t err = matter_start_thread_br();
         if (err == ESP_OK) {
             s_thread_running = true;
             update_thread_btn_label();
             matter_device_subscribe_thread();
+            show_spinner(dashboard_spinner, false);
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
                     "Thread border router started");
             }
         } else if (err == ESP_ERR_INVALID_STATE) {
+            show_spinner(dashboard_spinner, false);
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
                     "WiFi not connected. Connect first.");
             }
         } else {
+            show_spinner(dashboard_spinner, false);
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
                     "Thread border router failed to start");
@@ -586,6 +601,15 @@ static void set_field_visible(lv_obj_t *label, lv_obj_t *ta, bool vis) {
     } else {
         lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(ta, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void show_spinner(lv_obj_t *spinner, bool show) {
+    if (!spinner) return;
+    if (show) {
+        lv_obj_clear_flag(spinner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -826,6 +850,7 @@ static void btn_start_commission_cb(lv_event_t *e) {
         lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
     } else {
         s_commissioning_active = true;
+        show_spinner(commission_spinner, true);
         lv_label_set_text(commission_status_label,
             "Establishing PASE...");
     }
@@ -1245,9 +1270,32 @@ static void create_dashboard_screen(void) {
     lv_obj_set_style_pad_all(dashboard_container, 4, 0);
     lv_obj_set_style_pad_gap(dashboard_container, 8, 0);
 
-    dashboard_status_label = lv_label_create(scr_dashboard);
+    dashboard_status_row = lv_obj_create(scr_dashboard);
+    lv_obj_set_size(dashboard_status_row, LV_PCT(100),
+        LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(dashboard_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(dashboard_status_row,
+        LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(dashboard_status_row, 2, 0);
+    lv_obj_set_style_pad_gap(dashboard_status_row, 8, 0);
+    lv_obj_set_style_border_width(dashboard_status_row, 0, 0);
+    lv_obj_set_style_bg_opa(dashboard_status_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(dashboard_status_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    dashboard_spinner = lv_spinner_create(dashboard_status_row);
+    lv_spinner_set_anim_params(dashboard_spinner, 1000, 270);
+    lv_obj_set_size(dashboard_spinner, 20, 20);
+    lv_obj_set_style_arc_width(dashboard_spinner, 3, 0);
+    lv_obj_set_style_arc_width(dashboard_spinner, 3,
+        LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(dashboard_spinner,
+        lv_color_hex(0x00E5FF), LV_PART_INDICATOR);
+
+    dashboard_status_label = lv_label_create(dashboard_status_row);
     lv_label_set_text(dashboard_status_label, "Initializing...");
-    lv_obj_set_style_text_color(dashboard_status_label, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_color(dashboard_status_label,
+        lv_color_hex(0x888888), 0);
 
     lv_obj_t *dash_hints = create_key_hints_bar(scr_dashboard);
     hint_add_text(dash_hints, "Enter: Toggle");
@@ -1255,6 +1303,8 @@ static void create_dashboard_screen(void) {
     hint_add_text(dash_hints, "Details");
     hint_add_icon(dash_hints, &img_dsc_f2);
     hint_add_text(dash_hints, "Force Remove");
+    hint_add_icon(dash_hints, &img_dsc_f3);
+    hint_add_text(dash_hints, "Screenshot");
 }
 
 static void refresh_dashboard(void) {
@@ -1577,16 +1627,41 @@ static void create_commission_screen(void) {
     apply_focus_style(commission_start_btn);
     lv_group_add_obj(grp_commission, commission_start_btn);
 
-    commission_status_label = lv_label_create(scr_commission);
+    lv_obj_t *comm_status_row = lv_obj_create(scr_commission);
+    lv_obj_set_size(comm_status_row, LV_PCT(100),
+        LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(comm_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(comm_status_row, LV_FLEX_ALIGN_START,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(comm_status_row, 2, 0);
+    lv_obj_set_style_pad_gap(comm_status_row, 8, 0);
+    lv_obj_set_style_border_width(comm_status_row, 0, 0);
+    lv_obj_set_style_bg_opa(comm_status_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(comm_status_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    commission_spinner = lv_spinner_create(comm_status_row);
+    lv_spinner_set_anim_params(commission_spinner, 1000, 270);
+    lv_obj_set_size(commission_spinner, 20, 20);
+    lv_obj_set_style_arc_width(commission_spinner, 3, 0);
+    lv_obj_set_style_arc_width(commission_spinner, 3,
+        LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(commission_spinner,
+        lv_color_hex(0x00E5FF), LV_PART_INDICATOR);
+    lv_obj_add_flag(commission_spinner, LV_OBJ_FLAG_HIDDEN);
+
+    commission_status_label = lv_label_create(comm_status_row);
     lv_label_set_text(commission_status_label, "");
-    lv_obj_set_width(commission_status_label, LV_PCT(100));
-    lv_label_set_long_mode(commission_status_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_flex_grow(commission_status_label, 1);
+    lv_label_set_long_mode(commission_status_label,
+        LV_LABEL_LONG_WRAP);
 
     lv_obj_t *comm_hints = create_key_hints_bar(scr_commission);
     hint_add_text(comm_hints, "Tab: Next field");
     hint_add_text(comm_hints, "Enter: Confirm");
     hint_add_icon(comm_hints, &img_dsc_esc);
     hint_add_text(comm_hints, "Back");
+    hint_add_icon(comm_hints, &img_dsc_f3);
+    hint_add_text(comm_hints, "Screenshot");
 
     update_commission_fields();
 }
@@ -1852,6 +1927,8 @@ static void show_detail_for_device(uint64_t node_id) {
     hint_add_text(detail_hints, "Enter: Confirm");
     hint_add_icon(detail_hints, &img_dsc_esc);
     hint_add_text(detail_hints, "Back");
+    hint_add_icon(detail_hints, &img_dsc_f3);
+    hint_add_text(detail_hints, "Screenshot");
 
     switch_to_screen(scr_detail, grp_detail);
 }
