@@ -33,6 +33,9 @@ idf_component_register(
 		"icons/f1.png"
 		"icons/f2.png"
 		"icons/f3.png"
+		"icons/f4.png"
+		"icons/f5.png"
+		"icons/f6.png"
 )
 
 idf_component_get_property(lvgl_lib lvgl COMPONENT_LIB)
