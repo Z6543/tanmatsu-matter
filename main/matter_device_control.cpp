@@ -499,6 +499,30 @@ esp_err_t matter_device_subscribe_all(void) {
     return ESP_OK;
 }
 
+esp_err_t matter_device_subscribe_wifi(void) {
+    int count = device_manager_count();
+    for (int i = 0; i < count; i++) {
+        const matter_device_t *dev = device_manager_get(i);
+        if (dev && !dev->is_thread) {
+            matter_device_subscribe(
+                dev->node_id, dev->endpoint_id, dev->category);
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t matter_device_subscribe_thread(void) {
+    int count = device_manager_count();
+    for (int i = 0; i < count; i++) {
+        const matter_device_t *dev = device_manager_get(i);
+        if (dev && dev->is_thread) {
+            matter_device_subscribe(
+                dev->node_id, dev->endpoint_id, dev->category);
+        }
+    }
+    return ESP_OK;
+}
+
 // ---- Post-commissioning device info read ----
 
 static void info_read_complete(void) {

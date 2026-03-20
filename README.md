@@ -12,8 +12,9 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://nico
   - BLE + WiFi (discover over BLE, provision WiFi credentials)
   - BLE + Thread (discover over BLE, provision Thread network credentials)
 - Thread Border Router using the ESP32-C6 IEEE 802.15.4 radio as an OpenThread RCP
-- Dashboard with device cards showing on/off state
-- Toggle, turn on/off, rename, and unpair commissioned devices
+- Dashboard with device cards showing real-time state
+- Control devices by type: on/off, dimming, color temperature, hue/saturation, door locks, thermostats, window coverings, fans
+- Rename and unpair commissioned devices
 - Keyboard/encoder navigation with visual focus indicators
 - Device state persisted in NVS across reboots
 
@@ -171,16 +172,12 @@ UART console output is enabled by default (`CONFIG_ESP_CONSOLE_UART_DEFAULT=y`).
 1. The app connects to WiFi automatically on boot using stored credentials (managed by the tanmatsu wifi-manager)
 2. The Matter commissioner initializes and the dashboard shows "Commissioner ready"
 3. Press **+ Add** to commission a new device:
-   - **PIN** — on-network commissioning with a numeric setup PIN code
-   - **Disc+Pass** — discriminator + passcode with optional discovery hints
-   - **Manual** — manual pairing code (11-digit numeric, auto-detects transport)
-   - **QR** — QR code payload string (e.g. `MT:...`, auto-detects transport)
-   - **BLE+WiFi** — discover device over BLE, provision the current WiFi network credentials
-   - **BLE+Thread** — discover device over BLE, provision Thread network credentials via the border router
+   - Choose a **transport**: Ethernet (on-network), BLE+WiFi, or BLE+Thread
+   - Choose an **input mode**: QR code payload, manual pairing code, discriminator+passcode, or PIN code (PIN only for Ethernet)
    - Enter a device name and press **Start Commissioning**
 4. Commissioned devices appear as cards on the dashboard
    - **Enter**: Toggle the device on/off
-   - **F1**: Open device detail screen (on/off controls, rename, unpair)
+   - **F1**: Open device detail screen with type-specific controls (dimming, color, lock, thermostat, etc.)
    - **F2**: Force remove device
 
 ## Key Configuration

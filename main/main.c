@@ -33,7 +33,7 @@ static QueueHandle_t                input_event_queue = NULL;
 static void on_matter_event(matter_event_t event) {
     ui_post_event(event);
     if (event.type == MATTER_EVENT_STACK_READY) {
-        matter_device_subscribe_all();
+        matter_device_subscribe_wifi();
     }
 }
 
@@ -46,8 +46,8 @@ static void on_device_state_changed(uint64_t node_id) {
 static void on_wifi_got_ip(
     void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg; (void)base; (void)id; (void)data;
-    ESP_LOGI(TAG, "WiFi reconnected, re-subscribing to all devices");
-    matter_device_subscribe_all();
+    ESP_LOGI(TAG, "WiFi reconnected, re-subscribing to WiFi devices");
+    matter_device_subscribe_wifi();
 }
 
 void app_main(void) {

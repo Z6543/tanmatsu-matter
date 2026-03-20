@@ -66,6 +66,7 @@ static lv_area_t rotated_area;
 static esp_lcd_panel_handle_t panel_handle;
 
 static QueueHandle_t input_queue = NULL;
+static uint16_t s_nav_modifiers = 0;
 
 static lv_display_t* display = NULL;
 
@@ -78,6 +79,10 @@ void lvgl_lock() {
 
 void lvgl_unlock() {
     _lock_release(&lvgl_api_lock);
+}
+
+uint16_t lvgl_get_nav_modifiers(void) {
+    return s_nav_modifiers;
 }
 
 lv_display_t* lvgl_get_display(void) {
@@ -317,6 +322,7 @@ static void read_keyboard(lv_indev_t* indev, lv_indev_data_t* data) {
         if (xQueueReceive(input_queue, &event, 0) == pdTRUE) {
             switch (event.type) {
                 case INPUT_EVENT_TYPE_NAVIGATION:
+                    s_nav_modifiers = event.args_navigation.modifiers;
                     switch (event.args_navigation.key) {
                         case BSP_INPUT_NAVIGATION_KEY_UP:
                             data->key   = LV_KEY_UP;

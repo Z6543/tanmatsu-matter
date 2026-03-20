@@ -477,6 +477,52 @@ esp_err_t matter_commission_ble_wifi(
     return ESP_OK;
 }
 
+esp_err_t matter_commission_ble_wifi_code(
+    uint64_t node_id, const char *code) {
+    ESP_LOGI(TAG, "Pairing BLE+WiFi code: node=0x%llx code=%s",
+             (unsigned long long)node_id, code);
+
+    chip::SetupPayload payload;
+    bool parsed = false;
+    if (code[0] == 'M' && code[1] == 'T') {
+        chip::QRCodeSetupPayloadParser parser(code);
+        parsed = (parser.populatePayload(payload) == CHIP_NO_ERROR);
+    } else {
+        chip::ManualSetupPayloadParser parser(code);
+        parsed = (parser.populatePayload(payload) == CHIP_NO_ERROR);
+    }
+    if (!parsed) {
+        ESP_LOGE(TAG, "Failed to parse setup code");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    char ssid[33] = {};
+    char pwd[65] = {};
+    esp_err_t err =
+        get_wifi_creds(ssid, sizeof(ssid), pwd, sizeof(pwd));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get WiFi credentials");
+        return err;
+    }
+
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
+
+    chip::ByteSpan nameSpan(
+        reinterpret_cast<const uint8_t *>(ssid), strlen(ssid));
+    chip::ByteSpan pwdSpan(
+        reinterpret_cast<const uint8_t *>(pwd), strlen(pwd));
+    CommissioningParameters params;
+    params.SetWiFiCredentials(
+        chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
+    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
+
+    get_commissioner()->PairDevice(
+        node_id, code, params, DiscoveryType::kAll);
+    start_commission_timeout(node_id);
+    return ESP_OK;
+}
+
 esp_err_t matter_commission_ble_thread(
     uint64_t node_id, uint32_t pincode, uint16_t discriminator,
     const char *dataset_hex) {
@@ -540,6 +586,68 @@ esp_err_t matter_commission_ble_thread(
         chip::ByteSpan(dataset_buf, dataset_len));
 
     get_commissioner()->PairDevice(node_id, rendezvous, params);
+    start_commission_timeout(node_id);
+    return ESP_OK;
+}
+
+esp_err_t matter_commission_ble_thread_code(
+    uint64_t node_id, const char *code, const char *dataset_hex) {
+    ESP_LOGI(TAG, "Pairing BLE+Thread code: node=0x%llx code=%s",
+             (unsigned long long)node_id, code);
+
+    chip::SetupPayload payload;
+    bool parsed = false;
+    if (code[0] == 'M' && code[1] == 'T') {
+        chip::QRCodeSetupPayloadParser parser(code);
+        parsed = (parser.populatePayload(payload) == CHIP_NO_ERROR);
+    } else {
+        chip::ManualSetupPayloadParser parser(code);
+        parsed = (parser.populatePayload(payload) == CHIP_NO_ERROR);
+    }
+    if (!parsed) {
+        ESP_LOGE(TAG, "Failed to parse setup code");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t dataset_buf[chip::Thread::kSizeOperationalDataset];
+    int dataset_len = 0;
+
+    bool have_explicit = dataset_hex && dataset_hex[0] != '\0';
+    if (have_explicit) {
+        dataset_len = hex_to_bytes(
+            dataset_hex, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Invalid Thread dataset hex string");
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else {
+        char hex_buf[509];
+        esp_err_t err = matter_get_thread_active_dataset_hex(
+            hex_buf, sizeof(hex_buf));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "No Thread dataset provided and border "
+                     "router has no active dataset");
+            return ESP_ERR_NOT_FOUND;
+        }
+        dataset_len = hex_to_bytes(
+            hex_buf, dataset_buf, sizeof(dataset_buf));
+        if (dataset_len <= 0) {
+            ESP_LOGE(TAG, "Failed to decode border router dataset");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Using active dataset from border router");
+    }
+
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
+
+    CommissioningParameters params;
+    params.SetDeviceAttestationDelegate(&s_attestation_delegate);
+    params.SetThreadOperationalDataset(
+        chip::ByteSpan(dataset_buf, dataset_len));
+
+    get_commissioner()->PairDevice(
+        node_id, code, params, DiscoveryType::kAll);
     start_commission_timeout(node_id);
     return ESP_OK;
 }

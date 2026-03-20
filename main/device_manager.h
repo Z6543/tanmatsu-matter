@@ -38,6 +38,7 @@ typedef struct {
     uint32_t device_type_id;
     device_category_t category;
     bool     reachable;
+    bool     is_thread;
 
     // Common state
     bool     on_off;
@@ -81,7 +82,7 @@ const matter_device_t *device_manager_find(uint64_t node_id);
 matter_device_t       *device_manager_find_mut(uint64_t node_id);
 esp_err_t device_manager_add(
     uint64_t node_id, uint16_t endpoint_id, const char *name,
-    uint32_t device_type_id);
+    uint32_t device_type_id, bool is_thread);
 esp_err_t device_manager_remove(uint64_t node_id);
 esp_err_t device_manager_rename(uint64_t node_id, const char *name);
 esp_err_t device_manager_save(void);
