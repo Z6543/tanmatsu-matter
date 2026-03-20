@@ -80,6 +80,7 @@ static uint64_t  detail_node_id = 0;
 static uint64_t s_pending_node_id = 0;
 static char     s_pending_name[MATTER_DEVICE_NAME_LEN] = {};
 static bool     s_commissioning_active = false;
+static bool     s_attestation_warned = false;
 
 // Confirmation dialog state
 static lv_obj_t *confirm_dialog = NULL;
@@ -451,7 +452,14 @@ static void event_timer_cb(lv_timer_t *timer) {
             uint16_t ep = ev.endpoint_id ? ev.endpoint_id : 1;
             show_spinner(commission_spinner, false);
             if (commission_status_label) {
-                lv_label_set_text(commission_status_label, "Success!");
+                if (s_attestation_warned) {
+                    lv_label_set_text(commission_status_label,
+                        "\xE2\x9A\xA0 Test/unverified device,"
+                        " commission success!");
+                } else {
+                    lv_label_set_text(commission_status_label,
+                        "Success!");
+                }
             }
             device_manager_add(
                 ev.node_id, ep, name, ev.device_type_id,
@@ -482,6 +490,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             if (commission_start_btn) lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
             break;
         case MATTER_EVENT_ATTESTATION_WARNING:
+            s_attestation_warned = true;
             if (commission_status_label) {
                 lv_label_set_text(commission_status_label,
                     "Warning: device attestation failed.\n"
@@ -850,6 +859,7 @@ static void btn_start_commission_cb(lv_event_t *e) {
         lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
     } else {
         s_commissioning_active = true;
+        s_attestation_warned = false;
         show_spinner(commission_spinner, true);
         lv_label_set_text(commission_status_label,
             "Establishing PASE...");
