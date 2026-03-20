@@ -1059,11 +1059,20 @@ extern const uint8_t icon_f2_png_start[]  asm("_binary_f2_png_start");
 extern const uint8_t icon_f2_png_end[]    asm("_binary_f2_png_end");
 extern const uint8_t icon_f3_png_start[]  asm("_binary_f3_png_start");
 extern const uint8_t icon_f3_png_end[]    asm("_binary_f3_png_end");
+extern const uint8_t icon_f4_png_start[]  asm("_binary_f4_png_start");
+extern const uint8_t icon_f4_png_end[]    asm("_binary_f4_png_end");
+extern const uint8_t icon_f5_png_start[]  asm("_binary_f5_png_start");
+extern const uint8_t icon_f5_png_end[]    asm("_binary_f5_png_end");
+extern const uint8_t icon_f6_png_start[]  asm("_binary_f6_png_start");
+extern const uint8_t icon_f6_png_end[]    asm("_binary_f6_png_end");
 
 static lv_image_dsc_t img_dsc_esc;
 static lv_image_dsc_t img_dsc_f1;
 static lv_image_dsc_t img_dsc_f2;
 static lv_image_dsc_t img_dsc_f3;
+static lv_image_dsc_t img_dsc_f4;
+static lv_image_dsc_t img_dsc_f5;
+static lv_image_dsc_t img_dsc_f6;
 static bool icons_initialized = false;
 
 static void init_key_icons(void) {
@@ -1096,6 +1105,27 @@ static void init_key_icons(void) {
     img_dsc_f3.header.h = 32;
     img_dsc_f3.data = icon_f3_png_start;
     img_dsc_f3.data_size = icon_f3_png_end - icon_f3_png_start;
+
+    img_dsc_f4.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f4.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f4.header.w = 32;
+    img_dsc_f4.header.h = 32;
+    img_dsc_f4.data = icon_f4_png_start;
+    img_dsc_f4.data_size = icon_f4_png_end - icon_f4_png_start;
+
+    img_dsc_f5.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f5.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f5.header.w = 32;
+    img_dsc_f5.header.h = 32;
+    img_dsc_f5.data = icon_f5_png_start;
+    img_dsc_f5.data_size = icon_f5_png_end - icon_f5_png_start;
+
+    img_dsc_f6.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc_f6.header.cf = LV_COLOR_FORMAT_RAW;
+    img_dsc_f6.header.w = 32;
+    img_dsc_f6.header.h = 32;
+    img_dsc_f6.data = icon_f6_png_start;
+    img_dsc_f6.data_size = icon_f6_png_end - icon_f6_png_start;
 
     icons_initialized = true;
 }
