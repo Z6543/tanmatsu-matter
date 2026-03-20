@@ -1021,6 +1021,19 @@ static void btn_rename_cb(lv_event_t *e) {
     }
 }
 
+static void btn_reconnect_cb(lv_event_t *e) {
+    (void)e;
+    const matter_device_t *dev = device_manager_find(detail_node_id);
+    if (!dev) return;
+    matter_device_subscribe(
+        dev->node_id, dev->endpoint_id, dev->category);
+    if (detail_state_label) {
+        lv_label_set_text(detail_state_label, "Reconnecting...");
+        lv_obj_set_style_text_color(detail_state_label,
+            lv_color_hex(0x888888), 0);
+    }
+}
+
 static void btn_unpair_cb(lv_event_t *e) {
     (void)e;
     const matter_device_t *dev = device_manager_find(detail_node_id);
@@ -1908,6 +1921,10 @@ static void show_detail_for_device(uint64_t node_id) {
     lv_group_add_obj(grp_detail, detail_rename_ta);
 
     detail_add_btn(rename_row, "Save", btn_rename_cb);
+
+    // Reconnect button
+    detail_add_btn(detail_content,
+        LV_SYMBOL_REFRESH " Reconnect", btn_reconnect_cb);
 
     // Unpair button
     lv_obj_t *unpair_btn = lv_button_create(detail_content);
