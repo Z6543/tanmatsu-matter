@@ -102,7 +102,7 @@ matter_device_t *device_manager_find_mut(uint64_t node_id) {
 
 esp_err_t device_manager_add(
     uint64_t node_id, uint16_t endpoint_id, const char *name,
-    uint32_t device_type_id) {
+    uint32_t device_type_id, bool is_thread) {
     if (s_device_count >= MATTER_DEVICE_MAX) {
         ESP_LOGW(TAG, "Device list full");
         return ESP_ERR_NO_MEM;
@@ -117,6 +117,7 @@ esp_err_t device_manager_add(
     dev->endpoint_id = endpoint_id;
     dev->device_type_id = device_type_id;
     dev->category = device_type_to_category(device_type_id);
+    dev->is_thread = is_thread;
     dev->reachable = true;
     dev->on_off = false;
     if (name && name[0]) {

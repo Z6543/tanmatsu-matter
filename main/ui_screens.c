@@ -5,6 +5,7 @@
 #include "matter_init.h"
 
 #include "bsp_lvgl.h"
+#include "bsp/input.h"
 #include "sdcard.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -42,7 +43,8 @@ static lv_obj_t *dashboard_thread_btn = NULL;
 #define DASHBOARD_HEADER_BTNS 2
 
 // Commission widgets
-#define NUM_COMMISSION_METHODS 6
+// 0=Ethernet, 1=BLE+WiFi, 2=BLE+Thread
+#define NUM_COMMISSION_METHODS 3
 static lv_obj_t *commission_method_radios[NUM_COMMISSION_METHODS] = {};
 static lv_obj_t *commission_code_ta = NULL;
 static lv_obj_t *commission_disc_ta = NULL;
@@ -55,8 +57,13 @@ static lv_obj_t *commission_code_label = NULL;
 static lv_obj_t *commission_name_ta = NULL;
 static lv_obj_t *commission_status_label = NULL;
 static lv_obj_t *commission_start_btn = NULL;
-// 0=PIN, 1=Disc+Pass, 2=Manual, 3=QR, 4=BLE+WiFi, 5=BLE+Thread
 static int       commission_method = 0;
+
+// Input sub-mode: 0=QR, 1=Manual, 2=Disc+Pass, 3=PIN
+#define NUM_INPUT_MODES 4
+static lv_obj_t *commission_input_row = NULL;
+static lv_obj_t *commission_input_radios[NUM_INPUT_MODES] = {};
+static int       commission_input = 0;
 
 // Detail widgets
 static lv_obj_t *detail_name_label = NULL;
@@ -245,6 +252,26 @@ static int load_commission_method(void) {
     return (int)method;
 }
 
+static void save_input_mode(int input) {
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_UI_NS, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u8(nvs, "comm_input", (uint8_t)input);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+}
+
+static int load_input_mode(void) {
+    nvs_handle_t nvs;
+    uint8_t input = 0;
+    if (nvs_open(NVS_UI_NS, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, "comm_input", &input);
+        nvs_close(nvs);
+    }
+    if (input >= NUM_INPUT_MODES) input = 0;
+    return (int)input;
+}
+
 // ---- Confirmation dialog ----
 static void dismiss_confirm_dialog(void) {
     if (!confirm_dialog) return;
@@ -419,7 +446,8 @@ static void event_timer_cb(lv_timer_t *timer) {
                 lv_label_set_text(commission_status_label, "Success!");
             }
             device_manager_add(
-                ev.node_id, ep, name, ev.device_type_id);
+                ev.node_id, ep, name, ev.device_type_id,
+                commission_method == 2);
             const matter_device_t *dev =
                 device_manager_find(ev.node_id);
             device_category_t cat = dev ? dev->category
@@ -501,6 +529,7 @@ static void btn_thread_toggle_cb(lv_event_t *e) {
         if (err == ESP_OK) {
             s_thread_running = true;
             update_thread_btn_label();
+            matter_device_subscribe_thread();
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
                     "Thread border router started");
@@ -537,11 +566,9 @@ static void btn_add_cb(lv_event_t *e) {
     if (commission_name_ta) lv_textarea_set_text(commission_name_ta, "");
     switch_to_screen(scr_commission, grp_commission);
 
-    bool need_disc = (commission_method == 1 ||
-                      commission_method == 4 ||
-                      commission_method == 5);
-    lv_obj_t *first_ta = need_disc ? commission_disc_ta
-                                   : commission_code_ta;
+    lv_obj_t *first_ta = (commission_input == 2)
+                              ? commission_disc_ta
+                              : commission_code_ta;
     lv_group_focus_obj(first_ta);
 }
 
@@ -563,27 +590,56 @@ static void set_field_visible(lv_obj_t *label, lv_obj_t *ta, bool vis) {
 }
 
 static void update_commission_fields(void) {
-    bool show_disc = (commission_method == 1 ||
-                      commission_method == 4 ||
-                      commission_method == 5);
-    set_field_visible(commission_disc_label, commission_disc_ta, show_disc);
+    // PIN input mode only available for Ethernet
+    if (commission_input == 3 && commission_method != 0) {
+        commission_input = 2;
+        for (int i = 0; i < NUM_INPUT_MODES; i++) {
+            if (i == commission_input)
+                lv_obj_add_state(commission_input_radios[i],
+                    LV_STATE_CHECKED);
+            else
+                lv_obj_clear_state(commission_input_radios[i],
+                    LV_STATE_CHECKED);
+        }
+        save_input_mode(commission_input);
+    }
 
-    bool show_hints = (commission_method == 1);
-    set_field_visible(commission_hints_label, commission_hints_ta, show_hints);
+    // Show/hide PIN button based on method
+    if (commission_input_radios[3]) {
+        if (commission_method == 0) {
+            lv_obj_clear_flag(commission_input_radios[3],
+                LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(commission_input_radios[3],
+                LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
-    bool show_thread = (commission_method == 5);
-    set_field_visible(commission_thread_label, commission_thread_ta, show_thread);
+    bool show_disc = (commission_input == 2);
+    set_field_visible(commission_disc_label, commission_disc_ta,
+        show_disc);
 
-    static const char *labels[] = {
-        "Setup PIN Code:", "Passcode:", "Manual Pairing Code:",
-        "QR Code Payload:", "Passcode:", "Passcode:"
+    bool show_hints = (commission_method == 0 &&
+                       commission_input == 2);
+    set_field_visible(commission_hints_label, commission_hints_ta,
+        show_hints);
+
+    bool show_thread = (commission_method == 2);
+    set_field_visible(commission_thread_label, commission_thread_ta,
+        show_thread);
+
+    static const char *code_labels[] = {
+        "QR Code Payload:", "Manual Pairing Code:",
+        "Passcode:", "Setup PIN Code:"
     };
-    static const char *placeholders[] = {
-        "e.g. 20212020", "e.g. 20212020", "e.g. 34970112332",
-        "e.g. MT:...", "e.g. 20212020", "e.g. 20212020"
+    static const char *code_placeholders[] = {
+        "e.g. MT:...", "e.g. 34970112332",
+        "e.g. 20212020", "e.g. 20212020"
     };
-    lv_label_set_text(commission_code_label, labels[commission_method]);
-    lv_textarea_set_placeholder_text(commission_code_ta, placeholders[commission_method]);
+    lv_label_set_text(commission_code_label,
+        code_labels[commission_input]);
+    lv_textarea_set_placeholder_text(commission_code_ta,
+        code_placeholders[commission_input]);
 }
 
 static void method_radio_cb(lv_event_t *e) {
@@ -591,19 +647,40 @@ static void method_radio_cb(lv_event_t *e) {
     for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
         if (obj == commission_method_radios[i]) {
             commission_method = i;
-            lv_obj_add_state(commission_method_radios[i], LV_STATE_CHECKED);
+            lv_obj_add_state(commission_method_radios[i],
+                LV_STATE_CHECKED);
         } else {
-            lv_obj_clear_state(commission_method_radios[i], LV_STATE_CHECKED);
+            lv_obj_clear_state(commission_method_radios[i],
+                LV_STATE_CHECKED);
         }
     }
     save_commission_method(commission_method);
     update_commission_fields();
 
-    bool need_disc = (commission_method == 1 ||
-                      commission_method == 4 ||
-                      commission_method == 5);
-    lv_obj_t *first_ta = need_disc ? commission_disc_ta
-                                   : commission_code_ta;
+    lv_obj_t *first_ta = (commission_input == 2)
+                              ? commission_disc_ta
+                              : commission_code_ta;
+    lv_group_focus_obj(first_ta);
+}
+
+static void input_radio_cb(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    for (int i = 0; i < NUM_INPUT_MODES; i++) {
+        if (obj == commission_input_radios[i]) {
+            commission_input = i;
+            lv_obj_add_state(commission_input_radios[i],
+                LV_STATE_CHECKED);
+        } else {
+            lv_obj_clear_state(commission_input_radios[i],
+                LV_STATE_CHECKED);
+        }
+    }
+    save_input_mode(commission_input);
+    update_commission_fields();
+
+    lv_obj_t *first_ta = (commission_input == 2)
+                              ? commission_disc_ta
+                              : commission_code_ta;
     lv_group_focus_obj(first_ta);
 }
 
@@ -646,11 +723,13 @@ static void btn_start_commission_cb(lv_event_t *e) {
 
     if (!code_str || code_str[0] == '\0') {
         static const char *prompts[] = {
-            "Enter setup PIN code!", "Enter passcode!",
-            "Enter manual pairing code!", "Enter QR code payload!",
-            "Enter passcode!", "Enter passcode!"
+            "Enter QR code payload!",
+            "Enter manual pairing code!",
+            "Enter passcode!",
+            "Enter setup PIN code!"
         };
-        lv_label_set_text(commission_status_label, prompts[commission_method]);
+        lv_label_set_text(commission_status_label,
+            prompts[commission_input]);
         return;
     }
 
@@ -663,7 +742,8 @@ static void btn_start_commission_cb(lv_event_t *e) {
     lv_label_set_text(commission_status_label, "Starting...");
     lv_obj_add_state(commission_start_btn, LV_STATE_DISABLED);
 
-    bool needs_pincode = (commission_method != 2 && commission_method != 3);
+    bool needs_pincode = (commission_input == 2 ||
+                          commission_input == 3);
     uint32_t pincode = 0;
     if (needs_pincode && !is_valid_pincode(code_str, &pincode)) {
         lv_label_set_text(commission_status_label,
@@ -672,46 +752,58 @@ static void btn_start_commission_cb(lv_event_t *e) {
         return;
     }
 
-    bool needs_disc = (commission_method == 1 || commission_method == 4 ||
-                       commission_method == 5);
     uint16_t disc = 0;
-    if (needs_disc) {
-        const char *disc_str = lv_textarea_get_text(commission_disc_ta);
+    if (commission_input == 2) {
+        const char *disc_str =
+            lv_textarea_get_text(commission_disc_ta);
         if (!is_valid_discriminator(disc_str, &disc)) {
             lv_label_set_text(commission_status_label,
                 "Invalid discriminator (0-4095)");
-            lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
+            lv_obj_clear_state(commission_start_btn,
+                LV_STATE_DISABLED);
             return;
         }
     }
 
     switch (commission_method) {
-    case 0:
-        err = matter_commission_on_network(s_pending_node_id, pincode);
-        break;
-    case 1: {
-        const char *hints_str = lv_textarea_get_text(commission_hints_ta);
-        uint8_t hints = 0;
-        if (hints_str && is_all_digits(hints_str) && hints_str[0]) {
-            hints = (uint8_t)strtol(hints_str, NULL, 10);
+    case 0: // Ethernet
+        if (commission_input <= 1) {
+            err = matter_commission_setup_code(
+                s_pending_node_id, code_str);
+        } else if (commission_input == 2) {
+            const char *hints_str =
+                lv_textarea_get_text(commission_hints_ta);
+            uint8_t hints = 0;
+            if (hints_str && is_all_digits(hints_str) &&
+                hints_str[0]) {
+                hints = (uint8_t)strtol(hints_str, NULL, 10);
+            }
+            err = matter_commission_disc_pass(
+                s_pending_node_id, pincode, disc, hints);
+        } else {
+            err = matter_commission_on_network(
+                s_pending_node_id, pincode);
         }
-        err = matter_commission_disc_pass(
-            s_pending_node_id, pincode, disc, hints);
         break;
-    }
-    case 2:
-        err = matter_commission_setup_code(s_pending_node_id, code_str);
+    case 1: // BLE+WiFi
+        if (commission_input <= 1) {
+            err = matter_commission_ble_wifi_code(
+                s_pending_node_id, code_str);
+        } else {
+            err = matter_commission_ble_wifi(
+                s_pending_node_id, pincode, disc);
+        }
         break;
-    case 3:
-        err = matter_commission_setup_code(s_pending_node_id, code_str);
-        break;
-    case 4:
-        err = matter_commission_ble_wifi(s_pending_node_id, pincode, disc);
-        break;
-    case 5: {
-        const char *thread_str = lv_textarea_get_text(commission_thread_ta);
-        err = matter_commission_ble_thread(
-            s_pending_node_id, pincode, disc, thread_str);
+    case 2: { // BLE+Thread
+        const char *thread_str =
+            lv_textarea_get_text(commission_thread_ta);
+        if (commission_input <= 1) {
+            err = matter_commission_ble_thread_code(
+                s_pending_node_id, code_str, thread_str);
+        } else {
+            err = matter_commission_ble_thread(
+                s_pending_node_id, pincode, disc, thread_str);
+        }
         break;
     }
     }
@@ -719,19 +811,23 @@ static void btn_start_commission_cb(lv_event_t *e) {
     if (err != ESP_OK) {
         const char *msg = "Failed to start pairing";
         if (err == ESP_ERR_INVALID_STATE &&
-            commission_method <= 3) {
-            msg = "WiFi not connected. Connect to WiFi first "
-                  "for on-network commissioning.";
-        } else if (commission_method == 5 &&
+            commission_method <= 1) {
+            msg = "WiFi not connected. Connect to WiFi first.";
+        } else if (commission_method == 2 &&
                    err == ESP_ERR_NOT_FOUND) {
             msg = "No Thread dataset: border router has no active "
                   "network. Enter a dataset manually.";
+        } else if (err == ESP_ERR_INVALID_ARG &&
+                   commission_input <= 1) {
+            msg = "Invalid setup code. Check the QR or manual "
+                  "pairing code and try again.";
         }
         lv_label_set_text(commission_status_label, msg);
         lv_obj_clear_state(commission_start_btn, LV_STATE_DISABLED);
     } else {
         s_commissioning_active = true;
-        lv_label_set_text(commission_status_label, "Establishing PASE...");
+        lv_label_set_text(commission_status_label,
+            "Establishing PASE...");
     }
 }
 
@@ -783,6 +879,20 @@ static void btn_toggle_cb(lv_event_t *e) {
     if (s_commissioning_active) return;
     const matter_device_t *dev = device_manager_find(detail_node_id);
     if (dev) matter_device_send_toggle(dev->node_id, dev->endpoint_id);
+}
+
+static void slider_key_cb(lv_event_t *e) {
+    uint32_t key = lv_event_get_key(e);
+    if (key != LV_KEY_LEFT && key != LV_KEY_RIGHT) return;
+
+    lv_obj_t *slider = lv_event_get_target(e);
+    uint16_t mods = lvgl_get_nav_modifiers();
+    int32_t step = (mods & BSP_INPUT_MODIFIER_SHIFT) ? 1 : 10;
+    int32_t val = lv_slider_get_value(slider);
+    int32_t delta = (key == LV_KEY_RIGHT) ? step : -step;
+    lv_slider_set_value(slider, val + delta, LV_ANIM_ON);
+    lv_obj_send_event(slider, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_event_stop_processing(e);
 }
 
 static void slider_level_cb(lv_event_t *e) {
@@ -1189,6 +1299,16 @@ static void refresh_dashboard(void) {
                 dev->lock_state == 1
                     ? lv_color_hex(0x2E7D32)   // green = locked
                     : lv_color_hex(0xE65100), 0); // amber = unlocked
+        } else if (dev->category == DEVICE_CAT_OCCUPANCY_SENSOR) {
+            lv_obj_set_style_bg_color(card,
+                dev->occupancy
+                    ? lv_color_hex(0x2E7D32)   // green = occupied
+                    : lv_color_hex(0x37474F), 0);
+        } else if (dev->category == DEVICE_CAT_CONTACT_SENSOR) {
+            lv_obj_set_style_bg_color(card,
+                dev->contact
+                    ? lv_color_hex(0x2E7D32)   // green = closed
+                    : lv_color_hex(0xE65100), 0); // amber = open
         } else if (cat_is_sensor(dev->category)) {
             lv_obj_set_style_bg_color(card, lv_color_hex(0x37474F), 0);
         } else if (dev->on_off) {
@@ -1246,8 +1366,16 @@ static void create_commission_screen(void) {
     lv_obj_set_style_pad_all(scr_commission, 4, 0);
     lv_obj_set_style_pad_gap(scr_commission, 4, 0);
 
-    create_header(scr_commission, "Add New Device", btn_back_dashboard_cb, grp_commission);
+    create_header(scr_commission, "Add New Device",
+        btn_back_dashboard_cb, grp_commission);
 
+    // Description label
+    lv_obj_t *desc_label = lv_label_create(scr_commission);
+    lv_label_set_text(desc_label, "Matter IoT device transport:");
+    lv_obj_set_style_text_color(desc_label,
+        lv_color_hex(0xAAAAAA), 0);
+
+    // Transport method row: Ethernet, BLE+WiFi, BLE+Thread
     lv_obj_t *method_row = lv_obj_create(scr_commission);
     lv_obj_set_size(method_row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(method_row, LV_FLEX_FLOW_ROW);
@@ -1256,28 +1384,128 @@ static void create_commission_screen(void) {
     lv_obj_clear_flag(method_row, LV_OBJ_FLAG_SCROLLABLE);
 
     static const char *method_labels[] = {
-        "PIN", "Disc+Pass", "Manual", "QR", "BLE+WiFi", "BLE+Thread"
+        "Ethernet", "BLE+WiFi", "BLE+Thread"
     };
     for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
-        commission_method_radios[i] = lv_button_create(method_row);
-        lv_obj_add_flag(commission_method_radios[i], LV_OBJ_FLAG_CHECKABLE);
-        lv_obj_t *lbl = lv_label_create(commission_method_radios[i]);
+        commission_method_radios[i] =
+            lv_button_create(method_row);
+        lv_obj_add_flag(commission_method_radios[i],
+            LV_OBJ_FLAG_CHECKABLE);
+        lv_obj_t *lbl = lv_label_create(
+            commission_method_radios[i]);
         lv_label_set_text(lbl, method_labels[i]);
-        lv_obj_add_event_cb(commission_method_radios[i], method_radio_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_set_style_bg_color(commission_method_radios[i], lv_color_hex(0x333333), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_opa(commission_method_radios[i], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x999999), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(commission_method_radios[i], 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_set_style_bg_color(commission_method_radios[i], lv_color_hex(0x00C853), LV_PART_MAIN | LV_STATE_CHECKED);
-        lv_obj_set_style_bg_opa(commission_method_radios[i], LV_OPA_COVER, LV_PART_MAIN | LV_STATE_CHECKED);
-        lv_obj_set_style_text_color(commission_method_radios[i], lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_CHECKED);
-        lv_obj_set_style_border_width(commission_method_radios[i], 2, LV_PART_MAIN | LV_STATE_CHECKED);
-        lv_obj_set_style_border_color(commission_method_radios[i], lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_add_event_cb(commission_method_radios[i],
+            method_radio_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_set_style_bg_color(
+            commission_method_radios[i],
+            lv_color_hex(0x333333),
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(
+            commission_method_radios[i], LV_OPA_COVER,
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(
+            commission_method_radios[i],
+            lv_color_hex(0x999999),
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(
+            commission_method_radios[i], 0,
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(
+            commission_method_radios[i],
+            lv_color_hex(0x00C853),
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_bg_opa(
+            commission_method_radios[i], LV_OPA_COVER,
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_text_color(
+            commission_method_radios[i],
+            lv_color_hex(0x000000),
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_border_width(
+            commission_method_radios[i], 2,
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_border_color(
+            commission_method_radios[i],
+            lv_color_hex(0xFFFFFF),
+            LV_PART_MAIN | LV_STATE_CHECKED);
         apply_focus_style(commission_method_radios[i]);
-        lv_group_add_obj(grp_commission, commission_method_radios[i]);
+        lv_group_add_obj(grp_commission,
+            commission_method_radios[i]);
     }
     commission_method = load_commission_method();
     lv_obj_add_state(commission_method_radios[commission_method],
+        LV_STATE_CHECKED);
+
+    // Input sub-mode row (QR / Manual / Disc+Pass / PIN)
+    commission_input_row = lv_obj_create(scr_commission);
+    lv_obj_set_size(commission_input_row,
+        LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(commission_input_row,
+        LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_all(commission_input_row, 2, 0);
+    lv_obj_set_style_pad_gap(commission_input_row, 4, 0);
+    lv_obj_clear_flag(commission_input_row,
+        LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *via_label = lv_label_create(commission_input_row);
+    lv_label_set_text(via_label, "Via:");
+    lv_obj_set_style_text_color(via_label,
+        lv_color_hex(0xAAAAAA), 0);
+
+    static const char *input_labels[] = {
+        "QR Code", "Manual Code", "Disc+Pass", "PIN"
+    };
+    commission_input = load_input_mode();
+    for (int i = 0; i < NUM_INPUT_MODES; i++) {
+        commission_input_radios[i] =
+            lv_button_create(commission_input_row);
+        lv_obj_add_flag(commission_input_radios[i],
+            LV_OBJ_FLAG_CHECKABLE);
+        lv_obj_t *lbl = lv_label_create(
+            commission_input_radios[i]);
+        lv_label_set_text(lbl, input_labels[i]);
+        lv_obj_add_event_cb(commission_input_radios[i],
+            input_radio_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_set_style_bg_color(
+            commission_input_radios[i],
+            lv_color_hex(0x333333),
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(
+            commission_input_radios[i],
+            LV_OPA_COVER,
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(
+            commission_input_radios[i],
+            lv_color_hex(0x999999),
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(
+            commission_input_radios[i], 0,
+            LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(
+            commission_input_radios[i],
+            lv_color_hex(0x00897B),
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_bg_opa(
+            commission_input_radios[i],
+            LV_OPA_COVER,
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_text_color(
+            commission_input_radios[i],
+            lv_color_hex(0xFFFFFF),
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_border_width(
+            commission_input_radios[i], 2,
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        lv_obj_set_style_border_color(
+            commission_input_radios[i],
+            lv_color_hex(0xFFFFFF),
+            LV_PART_MAIN | LV_STATE_CHECKED);
+        apply_focus_style(commission_input_radios[i]);
+        lv_group_add_obj(grp_commission,
+            commission_input_radios[i]);
+    }
+    lv_obj_add_state(
+        commission_input_radios[commission_input],
         LV_STATE_CHECKED);
 
     commission_disc_label = lv_label_create(scr_commission);
@@ -1386,6 +1614,9 @@ static lv_obj_t *detail_add_slider(
     lv_slider_set_range(slider, min, max);
     lv_slider_set_value(slider, val, LV_ANIM_OFF);
     lv_obj_add_event_cb(slider, cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(
+        slider, slider_key_cb,
+        LV_EVENT_KEY | LV_EVENT_PREPROCESS, NULL);
     apply_focus_style(slider);
     lv_group_add_obj(grp_detail, slider);
     return slider;

@@ -60,6 +60,8 @@ esp_err_t matter_device_subscribe(
 esp_err_t matter_device_subscribe_onoff(
     uint64_t node_id, uint16_t ep);
 esp_err_t matter_device_subscribe_all(void);
+esp_err_t matter_device_subscribe_wifi(void);
+esp_err_t matter_device_subscribe_thread(void);
 
 /**
  * Read device info (endpoints + basic information + device type)

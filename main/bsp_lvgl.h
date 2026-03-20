@@ -19,6 +19,9 @@ void lvgl_lock();
 /// @brief Unlock LVGL
 void lvgl_unlock();
 
+/// @brief Get modifier keys from the last navigation event
+uint16_t lvgl_get_nav_modifiers(void);
+
 /// @brief Get LVGL display pointer
 lv_display_t* lvgl_get_display(void);
 
