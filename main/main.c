@@ -34,6 +34,22 @@ static void on_matter_event(matter_event_t event) {
     ui_post_event(event);
     if (event.type == MATTER_EVENT_STACK_READY) {
         matter_device_subscribe_wifi();
+
+        // Auto-start Thread border router if the RCP is available.
+        // This ensures Thread devices are reachable after reboot
+        // without requiring the user to press the Thread button.
+        if (matter_thread_available()) {
+            esp_err_t err = matter_start_thread_br();
+            if (err == ESP_OK) {
+                matter_device_subscribe_thread();
+                matter_event_t br_ev = {};
+                br_ev.type = MATTER_EVENT_THREAD_BR_STARTED;
+                ui_post_event(br_ev);
+            } else {
+                ESP_LOGW(TAG, "Thread BR auto-start failed: %d "
+                         "(will need manual start)", err);
+            }
+        }
     }
 }
 
@@ -48,6 +64,18 @@ static void on_wifi_got_ip(
     (void)arg; (void)base; (void)id; (void)data;
     ESP_LOGI(TAG, "WiFi reconnected, re-subscribing to WiFi devices");
     matter_device_subscribe_wifi();
+
+    // Try to start the Thread BR if it wasn't started yet
+    // (e.g. WiFi wasn't connected when Matter stack initialized).
+    if (matter_thread_available()) {
+        esp_err_t err = matter_start_thread_br();
+        if (err == ESP_OK) {
+            matter_device_subscribe_thread();
+            matter_event_t br_ev = {};
+            br_ev.type = MATTER_EVENT_THREAD_BR_STARTED;
+            ui_post_event(br_ev);
+        }
+    }
 }
 
 void app_main(void) {

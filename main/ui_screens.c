@@ -510,6 +510,14 @@ static void event_timer_cb(lv_timer_t *timer) {
             s_thread_running = false;
             update_thread_btn_label();
             break;
+        case MATTER_EVENT_THREAD_BR_STARTED:
+            s_thread_running = true;
+            update_thread_btn_label();
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Thread border router started");
+            }
+            break;
         }
     }
 }
