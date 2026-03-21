@@ -9,6 +9,7 @@
 #include <esp_matter_controller_cluster_command.h>
 #include <esp_matter_controller_read_command.h>
 #include <esp_matter_controller_subscribe_command.h>
+#include <esp_timer.h>
 
 static const char *TAG = "matter_ctrl";
 
@@ -519,6 +520,83 @@ esp_err_t matter_device_subscribe_thread(void) {
             matter_device_subscribe(
                 dev->node_id, dev->endpoint_id, dev->category);
         }
+    }
+    return ESP_OK;
+}
+
+// Delay Thread subscriptions to allow the Thread network to form
+// after border router init (~15s for leader election + routing).
+#define THREAD_SUBSCRIBE_DELAY_US (15ULL * 1000000ULL)
+static esp_timer_handle_t s_thread_sub_timer = NULL;
+
+static void thread_subscribe_timer_cb(void *arg) {
+    (void)arg;
+    ESP_LOGI(TAG, "Thread network settle time elapsed, "
+             "subscribing to Thread devices");
+    matter_device_subscribe_thread();
+}
+
+esp_err_t matter_device_subscribe_thread_delayed(void) {
+    if (!s_thread_sub_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = thread_subscribe_timer_cb;
+        args.name = "thread_sub";
+        esp_err_t err = esp_timer_create(&args, &s_thread_sub_timer);
+        if (err != ESP_OK) return err;
+    }
+    esp_timer_stop(s_thread_sub_timer);
+    ESP_LOGI(TAG, "Thread device subscribe scheduled in 15s");
+    return esp_timer_start_once(
+        s_thread_sub_timer, THREAD_SUBSCRIBE_DELAY_US);
+}
+
+// ---- Periodic reconnect for unreachable devices ----
+
+#define RECONNECT_INTERVAL_US (30ULL * 1000000ULL)
+static esp_timer_handle_t s_reconnect_timer = NULL;
+
+static void reconnect_timer_cb(void *arg) {
+    (void)arg;
+    int count = device_manager_count();
+    bool any_unreachable = false;
+    for (int i = 0; i < count; i++) {
+        const matter_device_t *dev = device_manager_get(i);
+        if (dev && !dev->reachable) {
+            if (dev->is_thread && !matter_thread_available()) {
+                continue;
+            }
+            ESP_LOGI(TAG, "Retrying subscribe for unreachable "
+                     "node 0x%llx",
+                     (unsigned long long)dev->node_id);
+            matter_device_subscribe(
+                dev->node_id, dev->endpoint_id, dev->category);
+            any_unreachable = true;
+        }
+    }
+    if (!any_unreachable) {
+        ESP_LOGI(TAG, "All devices reachable, stopping "
+                 "reconnect timer");
+        esp_timer_stop(s_reconnect_timer);
+    }
+}
+
+esp_err_t matter_device_start_reconnect_timer(void) {
+    if (!s_reconnect_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = reconnect_timer_cb;
+        args.name = "dev_reconn";
+        esp_err_t err = esp_timer_create(
+            &args, &s_reconnect_timer);
+        if (err != ESP_OK) return err;
+    }
+    esp_timer_stop(s_reconnect_timer);
+    return esp_timer_start_periodic(
+        s_reconnect_timer, RECONNECT_INTERVAL_US);
+}
+
+esp_err_t matter_device_stop_reconnect_timer(void) {
+    if (s_reconnect_timer) {
+        esp_timer_stop(s_reconnect_timer);
     }
     return ESP_OK;
 }

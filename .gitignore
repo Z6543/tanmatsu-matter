@@ -7,7 +7,6 @@ sdkconfig.old
 .vscode
 tools/__pycache__
 .cache
-esp-idf
 esp-idf-tools
 dependencies.lock
 managed_components
@@ -16,5 +15,4 @@ managed_components
 shell.nix
 sdkconfig
 .submodules_update_done
-build.sh
 

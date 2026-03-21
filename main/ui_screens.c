@@ -510,6 +510,14 @@ static void event_timer_cb(lv_timer_t *timer) {
             s_thread_running = false;
             update_thread_btn_label();
             break;
+        case MATTER_EVENT_THREAD_BR_STARTED:
+            s_thread_running = true;
+            update_thread_btn_label();
+            if (dashboard_status_label) {
+                lv_label_set_text(dashboard_status_label,
+                    "Thread border router started");
+            }
+            break;
         }
     }
 }
@@ -550,7 +558,7 @@ static void btn_thread_toggle_cb(lv_event_t *e) {
         if (err == ESP_OK) {
             s_thread_running = true;
             update_thread_btn_label();
-            matter_device_subscribe_thread();
+            matter_device_subscribe_thread_delayed();
             show_spinner(dashboard_spinner, false);
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
@@ -620,6 +628,48 @@ static void show_spinner(lv_obj_t *spinner, bool show) {
     } else {
         lv_obj_add_flag(spinner, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+// ---- Toast notification ----
+
+static lv_obj_t *s_toast_label = NULL;
+static lv_timer_t *s_toast_timer = NULL;
+
+static void toast_timer_cb(lv_timer_t *timer) {
+    (void)timer;
+    if (s_toast_label) {
+        lv_obj_delete(s_toast_label);
+        s_toast_label = NULL;
+    }
+    s_toast_timer = NULL;
+}
+
+static void show_toast(const char *msg) {
+    if (s_toast_label) {
+        lv_obj_delete(s_toast_label);
+        s_toast_label = NULL;
+    }
+    if (s_toast_timer) {
+        lv_timer_delete(s_toast_timer);
+        s_toast_timer = NULL;
+    }
+
+    lv_obj_t *scr = lv_screen_active();
+    if (!scr) return;
+
+    s_toast_label = lv_label_create(scr);
+    lv_label_set_text(s_toast_label, msg);
+    lv_obj_set_style_bg_opa(s_toast_label, LV_OPA_80, 0);
+    lv_obj_set_style_bg_color(
+        s_toast_label, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_text_color(
+        s_toast_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_pad_all(s_toast_label, 6, 0);
+    lv_obj_set_style_radius(s_toast_label, 4, 0);
+    lv_obj_align(s_toast_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+
+    s_toast_timer = lv_timer_create(toast_timer_cb, 2000, NULL);
+    lv_timer_set_repeat_count(s_toast_timer, 1);
 }
 
 static void update_commission_fields(void) {
@@ -1169,6 +1219,7 @@ static void apply_focus_style(lv_obj_t *obj) {
 static void take_screenshot(void) {
     if (!sdcard_is_mounted()) {
         ESP_LOGW(TAG, "Cannot save screenshot (SD not mounted)");
+        show_toast("No SD card inserted");
         return;
     }
 
@@ -1181,6 +1232,7 @@ static void take_screenshot(void) {
         scr, LV_COLOR_FORMAT_RGB565);
     if (!snap) {
         ESP_LOGE(TAG, "Snapshot failed (out of memory?)");
+        show_toast("Screenshot failed (no memory)");
         return;
     }
 
@@ -1201,6 +1253,7 @@ static void take_screenshot(void) {
     if (!f) {
         ESP_LOGE(TAG, "Failed to open %s for writing", filename);
         lv_draw_buf_destroy(snap);
+        show_toast("Screenshot failed (write error)");
         return;
     }
 
@@ -1226,6 +1279,7 @@ static void take_screenshot(void) {
     lv_draw_buf_destroy(snap);
     ESP_LOGI(TAG, "Screenshot saved: %s (%lux%lu)",
              filename, (unsigned long)w, (unsigned long)h);
+    show_toast(LV_SYMBOL_OK " Screenshot saved");
 }
 #endif
 
@@ -2029,14 +2083,23 @@ void ui_update_device_state(uint64_t node_id) {
             const matter_device_t *d = device_manager_get(i);
             if (d && d->reachable) reachable++;
         }
-        if (reachable >= total) {
+        // Don't count Thread devices when Thread radio is absent
+        bool thread_ok = matter_thread_available();
+        int expected = 0;
+        for (int i = 0; i < total; i++) {
+            const matter_device_t *d = device_manager_get(i);
+            if (d && (!d->is_thread || thread_ok)) expected++;
+        }
+
+        if (reachable >= expected) {
             lv_label_set_text(dashboard_status_label,
                 "Commissioner ready");
+            show_spinner(dashboard_spinner, false);
         } else {
             char buf[48];
             snprintf(buf, sizeof(buf),
                 "Reconnecting to devices... (%d/%d)",
-                reachable, total);
+                reachable, expected);
             lv_label_set_text(dashboard_status_label, buf);
         }
     }

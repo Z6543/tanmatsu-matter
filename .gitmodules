@@ -1,0 +1,8 @@
+[submodule "esp-matter"]
+	path = esp-matter
+	url = https://github.com/Z6543/esp-matter.git
+	branch = tanmatsu
+[submodule "esp-idf"]
+	path = esp-idf
+	url = https://github.com/espressif/esp-idf.git
+	branch = release/v5.5
