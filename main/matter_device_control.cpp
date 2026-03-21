@@ -9,6 +9,7 @@
 #include <esp_matter_controller_cluster_command.h>
 #include <esp_matter_controller_read_command.h>
 #include <esp_matter_controller_subscribe_command.h>
+#include <esp_timer.h>
 
 static const char *TAG = "matter_ctrl";
 
@@ -521,6 +522,32 @@ esp_err_t matter_device_subscribe_thread(void) {
         }
     }
     return ESP_OK;
+}
+
+// Delay Thread subscriptions to allow the Thread network to form
+// after border router init (~15s for leader election + routing).
+#define THREAD_SUBSCRIBE_DELAY_US (15ULL * 1000000ULL)
+static esp_timer_handle_t s_thread_sub_timer = NULL;
+
+static void thread_subscribe_timer_cb(void *arg) {
+    (void)arg;
+    ESP_LOGI(TAG, "Thread network settle time elapsed, "
+             "subscribing to Thread devices");
+    matter_device_subscribe_thread();
+}
+
+esp_err_t matter_device_subscribe_thread_delayed(void) {
+    if (!s_thread_sub_timer) {
+        esp_timer_create_args_t args = {};
+        args.callback = thread_subscribe_timer_cb;
+        args.name = "thread_sub";
+        esp_err_t err = esp_timer_create(&args, &s_thread_sub_timer);
+        if (err != ESP_OK) return err;
+    }
+    esp_timer_stop(s_thread_sub_timer);
+    ESP_LOGI(TAG, "Thread device subscribe scheduled in 15s");
+    return esp_timer_start_once(
+        s_thread_sub_timer, THREAD_SUBSCRIBE_DELAY_US);
 }
 
 // ---- Post-commissioning device info read ----

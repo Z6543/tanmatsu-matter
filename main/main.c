@@ -30,6 +30,17 @@ static lcd_color_rgb_pixel_format_t display_color_format;
 static lcd_rgb_data_endian_t        display_data_endian;
 static QueueHandle_t                input_event_queue = NULL;
 
+static void start_thread_br_and_subscribe(void) {
+    if (!matter_thread_available()) return;
+    esp_err_t err = matter_start_thread_br();
+    if (err == ESP_OK) {
+        matter_event_t br_ev = {};
+        br_ev.type = MATTER_EVENT_THREAD_BR_STARTED;
+        ui_post_event(br_ev);
+        matter_device_subscribe_thread_delayed();
+    }
+}
+
 static void on_matter_event(matter_event_t event) {
     ui_post_event(event);
     if (event.type == MATTER_EVENT_STACK_READY) {
@@ -38,18 +49,8 @@ static void on_matter_event(matter_event_t event) {
         // Auto-start Thread border router if the RCP is available.
         // This ensures Thread devices are reachable after reboot
         // without requiring the user to press the Thread button.
-        if (matter_thread_available()) {
-            esp_err_t err = matter_start_thread_br();
-            if (err == ESP_OK) {
-                matter_device_subscribe_thread();
-                matter_event_t br_ev = {};
-                br_ev.type = MATTER_EVENT_THREAD_BR_STARTED;
-                ui_post_event(br_ev);
-            } else {
-                ESP_LOGW(TAG, "Thread BR auto-start failed: %d "
-                         "(will need manual start)", err);
-            }
-        }
+        // If it fails (e.g. no WiFi yet), on_wifi_got_ip retries.
+        start_thread_br_and_subscribe();
     }
 }
 
@@ -67,15 +68,7 @@ static void on_wifi_got_ip(
 
     // Try to start the Thread BR if it wasn't started yet
     // (e.g. WiFi wasn't connected when Matter stack initialized).
-    if (matter_thread_available()) {
-        esp_err_t err = matter_start_thread_br();
-        if (err == ESP_OK) {
-            matter_device_subscribe_thread();
-            matter_event_t br_ev = {};
-            br_ev.type = MATTER_EVENT_THREAD_BR_STARTED;
-            ui_post_event(br_ev);
-        }
-    }
+    start_thread_br_and_subscribe();
 }
 
 void app_main(void) {
