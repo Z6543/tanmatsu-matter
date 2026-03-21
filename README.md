@@ -243,6 +243,35 @@ The Tanmatsu acts as a Thread Border Router, bridging between the WiFi/IP networ
 
 The default Thread network uses channel 15, PAN ID 0x1234, and network name "Tanmatsu" with development keys. For production use, replace the dataset with your network's active operational dataset.
 
+### Managing the Thread dataset via BadgeLink
+
+The Thread active operational dataset is stored in NVS and can be read, written, or erased using [BadgeLink](https://docs.tanmatsu.cloud/software/badgelink/). This is useful for pre-provisioning a Thread network, sharing credentials between devices, or resetting the Thread configuration.
+
+The dataset is stored as a binary blob in the `openthread` NVS namespace under key `OT0100` (OpenThread key format: `OT` + `01` for ActiveDataset + `00` for index 0).
+
+```bash
+# List all OpenThread NVS keys
+./badgelink.sh nvs list openthread
+
+# Read the current active dataset (binary blob)
+./badgelink.sh nvs read openthread OT0100 blob
+
+# Write a dataset from a binary file
+./badgelink.sh nvs write openthread OT0100 blob dataset.bin --file
+
+# Delete the dataset (forces regeneration from sdkconfig defaults on next boot)
+./badgelink.sh nvs delete openthread OT0100
+```
+
+To transfer a dataset from another Thread border router:
+
+1. Export the dataset as hex from the source (e.g., `ot-ctl dataset active -x`)
+2. Convert to a binary file: `echo -n "<hex>" | xxd -r -p > dataset.bin`
+3. Write it: `./badgelink.sh nvs write openthread OT0100 blob dataset.bin --file`
+4. Reboot the device — the border router will use the stored dataset
+
+If no dataset exists in NVS on boot, the app creates one automatically from the sdkconfig defaults (`esp_openthread_auto_start`).
+
 ## License
 
 The contents of this repository may be considered in the public domain or [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0) licensed at your disposal.

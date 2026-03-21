@@ -51,6 +51,11 @@ static void on_matter_event(matter_event_t event) {
         // without requiring the user to press the Thread button.
         // If it fails (e.g. no WiFi yet), on_wifi_got_ip retries.
         start_thread_br_and_subscribe();
+
+        // Retry unreachable devices every 30s until all connect
+        if (device_manager_count() > 0) {
+            matter_device_start_reconnect_timer();
+        }
     }
 }
 
@@ -69,6 +74,10 @@ static void on_wifi_got_ip(
     // Try to start the Thread BR if it wasn't started yet
     // (e.g. WiFi wasn't connected when Matter stack initialized).
     start_thread_br_and_subscribe();
+
+    if (device_manager_count() > 0) {
+        matter_device_start_reconnect_timer();
+    }
 }
 
 void app_main(void) {
