@@ -14,11 +14,8 @@ typedef enum {
     INTERFACE_MODE_THREAD,
 } interface_mode_t;
 
-// Load persisted interface mode from NVS (INTERFACE_MODE_NONE if unset)
-interface_mode_t ui_load_interface_mode(void);
-
-// Save interface mode to NVS
-void ui_save_interface_mode(interface_mode_t mode);
+// Get the current interface mode selected by the user
+interface_mode_t ui_get_interface_mode(void);
 
 void ui_screens_init(void);
 interface_mode_t ui_wait_for_mode_selection(void);

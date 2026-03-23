@@ -128,11 +128,8 @@ void app_main(void) {
     ui_screens_init();
     lvgl_unlock();
 
-    s_mode = ui_load_interface_mode();
-    if (s_mode == INTERFACE_MODE_NONE) {
-        ESP_LOGI(TAG, "Waiting for interface mode selection...");
-        s_mode = ui_wait_for_mode_selection();
-    }
+    ESP_LOGI(TAG, "Waiting for interface mode selection...");
+    s_mode = ui_wait_for_mode_selection();
 
     ESP_LOGI(TAG, "Interface mode: %s",
              s_mode == INTERFACE_MODE_WIFI ? "WiFi" : "Thread");

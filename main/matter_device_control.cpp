@@ -557,7 +557,7 @@ static esp_timer_handle_t s_reconnect_timer = NULL;
 
 static void reconnect_timer_cb(void *arg) {
     (void)arg;
-    interface_mode_t mode = ui_load_interface_mode();
+    interface_mode_t mode = ui_get_interface_mode();
     int count = device_manager_count();
     bool any_unreachable = false;
     for (int i = 0; i < count; i++) {
