@@ -325,11 +325,11 @@ static void read_keyboard(lv_indev_t* indev, lv_indev_data_t* data) {
                     s_nav_modifiers = event.args_navigation.modifiers;
                     switch (event.args_navigation.key) {
                         case BSP_INPUT_NAVIGATION_KEY_UP:
-                            data->key   = LV_KEY_UP;
+                            data->key   = LV_KEY_PREV;
                             data->state = event.args_navigation.state;
                             break;
                         case BSP_INPUT_NAVIGATION_KEY_DOWN:
-                            data->key   = LV_KEY_DOWN;
+                            data->key   = LV_KEY_NEXT;
                             data->state = event.args_navigation.state;
                             break;
                         case BSP_INPUT_NAVIGATION_KEY_LEFT:

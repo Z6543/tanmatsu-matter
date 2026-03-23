@@ -557,21 +557,21 @@ static esp_timer_handle_t s_reconnect_timer = NULL;
 
 static void reconnect_timer_cb(void *arg) {
     (void)arg;
+    interface_mode_t mode = ui_get_interface_mode();
     int count = device_manager_count();
     bool any_unreachable = false;
     for (int i = 0; i < count; i++) {
         const matter_device_t *dev = device_manager_get(i);
-        if (dev && !dev->reachable) {
-            if (dev->is_thread && !matter_thread_available()) {
-                continue;
-            }
-            ESP_LOGI(TAG, "Retrying subscribe for unreachable "
-                     "node 0x%llx",
-                     (unsigned long long)dev->node_id);
-            matter_device_subscribe(
-                dev->node_id, dev->endpoint_id, dev->category);
-            any_unreachable = true;
-        }
+        if (!dev || dev->reachable) continue;
+        // Skip devices from the wrong interface
+        if (mode == INTERFACE_MODE_WIFI && dev->is_thread) continue;
+        if (mode == INTERFACE_MODE_THREAD && !dev->is_thread) continue;
+        ESP_LOGI(TAG, "Retrying subscribe for unreachable "
+                 "node 0x%llx",
+                 (unsigned long long)dev->node_id);
+        matter_device_subscribe(
+            dev->node_id, dev->endpoint_id, dev->category);
+        any_unreachable = true;
     }
     if (!any_unreachable) {
         ESP_LOGI(TAG, "All devices reachable, stopping "

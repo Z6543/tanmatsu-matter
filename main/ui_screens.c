@@ -24,12 +24,17 @@
 // Event queue for Matter -> UI communication
 static QueueHandle_t s_ui_event_queue = NULL;
 
+// Active interface mode
+static interface_mode_t s_interface_mode = INTERFACE_MODE_NONE;
+
 // Screen objects
+static lv_obj_t *scr_select = NULL;
 static lv_obj_t *scr_dashboard = NULL;
 static lv_obj_t *scr_commission = NULL;
 static lv_obj_t *scr_detail = NULL;
 
 // Per-screen input groups
+static lv_group_t *grp_select = NULL;
 static lv_group_t *grp_dashboard = NULL;
 static lv_group_t *grp_commission = NULL;
 static lv_group_t *grp_detail = NULL;
@@ -39,10 +44,9 @@ static lv_obj_t *dashboard_container = NULL;
 static lv_obj_t *dashboard_status_label = NULL;
 static lv_obj_t *dashboard_status_row = NULL;
 static lv_obj_t *dashboard_spinner = NULL;
-static lv_obj_t *dashboard_thread_btn = NULL;
 
-// Number of fixed header buttons in grp_dashboard (Thread + Add)
-#define DASHBOARD_HEADER_BTNS 2
+// Number of fixed header buttons in grp_dashboard (mode-dependent)
+static int dashboard_header_btns = 0;
 
 // Commission widgets
 // 0=Ethernet, 1=BLE+WiFi, 2=BLE+Thread
@@ -97,6 +101,7 @@ static lv_timer_t *s_event_timer = NULL;
 static const char *NVS_UI_NS = "matter_ui";
 
 // Forward declarations
+static void create_select_screen(void);
 static void create_dashboard_screen(void);
 static void create_commission_screen(void);
 static void create_detail_screen(void);
@@ -277,6 +282,11 @@ static int load_input_mode(void) {
     return (int)input;
 }
 
+
+interface_mode_t ui_get_interface_mode(void) {
+    return s_interface_mode;
+}
+
 // ---- Confirmation dialog ----
 static void dismiss_confirm_dialog(void) {
     if (!confirm_dialog) return;
@@ -378,17 +388,6 @@ static void show_confirm_dialog(
     lv_group_focus_obj(no_btn);
 }
 
-// ---- Thread button state ----
-static bool s_thread_running = false;
-
-static void update_thread_btn_label(void) {
-    if (!dashboard_thread_btn) return;
-    lv_obj_t *lbl = lv_obj_get_child(dashboard_thread_btn, 0);
-    if (!lbl) return;
-    lv_label_set_text(lbl, s_thread_running
-        ? LV_SYMBOL_CLOSE " Stop Thread"
-        : LV_SYMBOL_REFRESH " Start Thread");
-}
 
 // ---- Event queue timer callback ----
 static void event_timer_cb(lv_timer_t *timer) {
@@ -407,16 +406,6 @@ static void event_timer_cb(lv_timer_t *timer) {
                     lv_label_set_text(dashboard_status_label,
                         "Commissioner ready");
                     show_spinner(dashboard_spinner, false);
-                }
-            }
-            if (!matter_thread_available() && dashboard_thread_btn) {
-                lv_obj_add_state(dashboard_thread_btn,
-                    LV_STATE_DISABLED);
-                lv_obj_t *lbl = lv_obj_get_child(
-                    dashboard_thread_btn, 0);
-                if (lbl) {
-                    lv_label_set_text(lbl,
-                        LV_SYMBOL_CLOSE " No Thread Radio");
                 }
             }
             break;
@@ -507,12 +496,8 @@ static void event_timer_cb(lv_timer_t *timer) {
                 lv_obj_set_style_text_color(dashboard_status_label,
                     lv_color_hex(0xFFFFFF), 0);
             }
-            s_thread_running = false;
-            update_thread_btn_label();
             break;
         case MATTER_EVENT_THREAD_BR_STARTED:
-            s_thread_running = true;
-            update_thread_btn_label();
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label,
                     "Thread border router started");
@@ -523,63 +508,6 @@ static void event_timer_cb(lv_timer_t *timer) {
 }
 
 // ---- Navigation callbacks ----
-static void btn_thread_toggle_cb(lv_event_t *e) {
-    (void)e;
-    if (s_thread_running) {
-        if (dashboard_status_label) {
-            lv_label_set_text(dashboard_status_label,
-                "Stopping Thread border router...");
-            lv_obj_set_style_text_color(dashboard_status_label,
-                lv_color_hex(0x888888), 0);
-        }
-        esp_err_t err = matter_stop_thread_br();
-        if (err == ESP_OK) {
-            s_thread_running = false;
-            update_thread_btn_label();
-            if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label,
-                    "Thread border router stopped");
-            }
-        } else {
-            if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label,
-                    "Failed to stop Thread border router");
-            }
-        }
-    } else {
-        if (dashboard_status_label) {
-            lv_label_set_text(dashboard_status_label,
-                "Starting Thread border router...");
-            lv_obj_set_style_text_color(dashboard_status_label,
-                lv_color_hex(0x888888), 0);
-        }
-        show_spinner(dashboard_spinner, true);
-        esp_err_t err = matter_start_thread_br();
-        if (err == ESP_OK) {
-            s_thread_running = true;
-            update_thread_btn_label();
-            matter_device_subscribe_thread_delayed();
-            show_spinner(dashboard_spinner, false);
-            if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label,
-                    "Thread border router started");
-            }
-        } else if (err == ESP_ERR_INVALID_STATE) {
-            show_spinner(dashboard_spinner, false);
-            if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label,
-                    "WiFi not connected. Connect first.");
-            }
-        } else {
-            show_spinner(dashboard_spinner, false);
-            if (dashboard_status_label) {
-                lv_label_set_text(dashboard_status_label,
-                    "Thread border router failed to start");
-            }
-        }
-    }
-}
-
 static void btn_add_cb(lv_event_t *e) {
     (void)e;
     if (commission_status_label) lv_label_set_text(commission_status_label, "");
@@ -1335,6 +1263,158 @@ static lv_obj_t *create_header(lv_obj_t *parent, const char *title, lv_event_cb_
     return header;
 }
 
+// ---- Interface selection screen ----
+
+// Semaphore to unblock app_main when user picks a mode
+static SemaphoreHandle_t s_mode_selected_sem = NULL;
+static lv_obj_t *select_status_row = NULL;
+static lv_obj_t *select_status_label = NULL;
+static lv_obj_t *select_wifi_btn = NULL;
+static lv_obj_t *select_thread_btn = NULL;
+
+static void show_select_loading(const char *mode_name) {
+    // Disable buttons so the user can't double-tap
+    if (select_wifi_btn) {
+        lv_obj_add_state(select_wifi_btn, LV_STATE_DISABLED);
+    }
+    if (select_thread_btn) {
+        lv_obj_add_state(select_thread_btn, LV_STATE_DISABLED);
+    }
+    // Show spinner + status
+    if (select_status_row) {
+        lv_obj_clear_flag(select_status_row, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (select_status_label) {
+        char buf[64];
+        snprintf(buf, sizeof(buf),
+            "Starting %s mode...", mode_name);
+        lv_label_set_text(select_status_label, buf);
+    }
+}
+
+static void select_wifi_cb(lv_event_t *e) {
+    (void)e;
+    s_interface_mode = INTERFACE_MODE_WIFI;
+    show_select_loading("WiFi");
+    if (s_mode_selected_sem) {
+        xSemaphoreGive(s_mode_selected_sem);
+    }
+}
+
+static void select_thread_cb(lv_event_t *e) {
+    (void)e;
+    s_interface_mode = INTERFACE_MODE_THREAD;
+    show_select_loading("Thread");
+    if (s_mode_selected_sem) {
+        xSemaphoreGive(s_mode_selected_sem);
+    }
+}
+
+static void create_select_screen(void) {
+    grp_select = lv_group_create();
+
+    scr_select = lv_obj_create(NULL);
+    lv_obj_set_flex_flow(scr_select, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(scr_select,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(scr_select, 16, 0);
+    lv_obj_set_style_pad_gap(scr_select, 12, 0);
+
+    lv_obj_t *title = lv_label_create(scr_select);
+    lv_label_set_text(title,
+        LV_SYMBOL_SETTINGS " Tanmatsu Matter");
+    lv_obj_set_style_text_color(title,
+        lv_color_hex(0x00E5FF), 0);
+
+    lv_obj_t *subtitle = lv_label_create(scr_select);
+    lv_label_set_text(subtitle,
+        "Select primary interface:");
+    lv_obj_set_style_text_color(subtitle,
+        lv_color_hex(0xAAAAAA), 0);
+
+    select_wifi_btn = lv_button_create(scr_select);
+    lv_obj_set_size(select_wifi_btn, 320, 70);
+    lv_obj_set_flex_flow(select_wifi_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(select_wifi_btn,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_color(select_wifi_btn,
+        lv_color_hex(0x1565C0), 0);
+    lv_obj_t *wifi_lbl = lv_label_create(select_wifi_btn);
+    lv_label_set_text(wifi_lbl,
+        LV_SYMBOL_WIFI " WiFi");
+    lv_obj_t *wifi_desc = lv_label_create(select_wifi_btn);
+    lv_label_set_text(wifi_desc,
+        "BLE commissioning, WiFi devices");
+    lv_obj_set_style_text_color(wifi_desc,
+        lv_color_hex(0xBBDEFB), 0);
+    lv_obj_add_event_cb(select_wifi_btn,
+        select_wifi_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(select_wifi_btn);
+    lv_group_add_obj(grp_select, select_wifi_btn);
+
+    select_thread_btn = lv_button_create(scr_select);
+    lv_obj_set_size(select_thread_btn, 320, 70);
+    lv_obj_set_flex_flow(select_thread_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(select_thread_btn,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_color(select_thread_btn,
+        lv_color_hex(0x2E7D32), 0);
+    lv_obj_t *thread_lbl = lv_label_create(select_thread_btn);
+    lv_label_set_text(thread_lbl,
+        LV_SYMBOL_REFRESH " Thread");
+    lv_obj_t *thread_desc = lv_label_create(select_thread_btn);
+    lv_label_set_text(thread_desc,
+        "BLE commissioning, Thread border router");
+    lv_obj_set_style_text_color(thread_desc,
+        lv_color_hex(0xC8E6C9), 0);
+    lv_obj_add_event_cb(select_thread_btn,
+        select_thread_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(select_thread_btn);
+    lv_group_add_obj(grp_select, select_thread_btn);
+
+    lv_obj_t *note = lv_label_create(scr_select);
+    lv_label_set_text(note,
+        "Thread requires ot_rcp radio firmware.\n"
+        "See github.com/Z6543/tanmatsu-matter releases.");
+    lv_obj_set_style_text_color(note,
+        lv_color_hex(0xFF9800), 0);
+    lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+
+    // Status row with spinner (hidden until user picks)
+    select_status_row = lv_obj_create(scr_select);
+    lv_obj_set_size(select_status_row,
+        LV_PCT(80), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(select_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(select_status_row,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(select_status_row, 8, 0);
+    lv_obj_set_style_pad_gap(select_status_row, 10, 0);
+    lv_obj_set_style_border_width(select_status_row, 0, 0);
+    lv_obj_set_style_bg_opa(select_status_row,
+        LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(select_status_row,
+        LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(select_status_row, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *spinner = lv_spinner_create(select_status_row);
+    lv_spinner_set_anim_params(spinner, 1000, 270);
+    lv_obj_set_size(spinner, 24, 24);
+    lv_obj_set_style_arc_width(spinner, 3, 0);
+    lv_obj_set_style_arc_width(spinner, 3,
+        LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner,
+        lv_color_hex(0x00E5FF), LV_PART_INDICATOR);
+
+    select_status_label = lv_label_create(select_status_row);
+    lv_label_set_text(select_status_label, "");
+    lv_obj_set_style_text_color(select_status_label,
+        lv_color_hex(0xFFFFFF), 0);
+}
+
 static void create_dashboard_screen(void) {
     grp_dashboard = lv_group_create();
 
@@ -1352,16 +1432,11 @@ static void create_dashboard_screen(void) {
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, LV_SYMBOL_HOME " Matter Commissioner");
+    const char *mode_label = (s_interface_mode == INTERFACE_MODE_THREAD)
+        ? LV_SYMBOL_HOME " Matter [Thread]"
+        : LV_SYMBOL_HOME " Matter [WiFi]";
+    lv_label_set_text(title, mode_label);
     lv_obj_set_flex_grow(title, 1);
-
-    dashboard_thread_btn = lv_button_create(header);
-    lv_obj_t *thread_lbl = lv_label_create(dashboard_thread_btn);
-    lv_label_set_text(thread_lbl, LV_SYMBOL_REFRESH " Start Thread");
-    lv_obj_add_event_cb(dashboard_thread_btn,
-        btn_thread_toggle_cb, LV_EVENT_CLICKED, NULL);
-    apply_focus_style(dashboard_thread_btn);
-    lv_group_add_obj(grp_dashboard, dashboard_thread_btn);
 
     lv_obj_t *add_btn = lv_button_create(header);
     lv_obj_t *add_lbl = lv_label_create(add_btn);
@@ -1369,6 +1444,8 @@ static void create_dashboard_screen(void) {
     lv_obj_add_event_cb(add_btn, btn_add_cb, LV_EVENT_CLICKED, NULL);
     apply_focus_style(add_btn);
     lv_group_add_obj(grp_dashboard, add_btn);
+
+    dashboard_header_btns = lv_group_get_obj_count(grp_dashboard);
 
     dashboard_container = lv_obj_create(scr_dashboard);
     lv_obj_set_size(dashboard_container, LV_PCT(100), LV_SIZE_CONTENT);
@@ -1418,7 +1495,7 @@ static void refresh_dashboard(void) {
     if (!dashboard_container) return;
     lv_obj_clean(dashboard_container);
 
-    while (lv_group_get_obj_count(grp_dashboard) > DASHBOARD_HEADER_BTNS) {
+    while (lv_group_get_obj_count(grp_dashboard) > dashboard_header_btns) {
         lv_obj_t *last = lv_group_get_obj_by_index(
             grp_dashboard,
             lv_group_get_obj_count(grp_dashboard) - 1);
@@ -1426,7 +1503,17 @@ static void refresh_dashboard(void) {
     }
 
     int count = device_manager_count();
-    if (count == 0) {
+    int visible = 0;
+    for (int i = 0; i < count; i++) {
+        const matter_device_t *d = device_manager_get(i);
+        if (!d) continue;
+        if (s_interface_mode == INTERFACE_MODE_WIFI &&
+            d->is_thread) continue;
+        if (s_interface_mode == INTERFACE_MODE_THREAD &&
+            !d->is_thread) continue;
+        visible++;
+    }
+    if (visible == 0) {
         lv_obj_t *lbl = lv_label_create(dashboard_container);
         lv_label_set_text(lbl,
             "No devices.\n"
@@ -1439,6 +1526,11 @@ static void refresh_dashboard(void) {
     for (int i = 0; i < count; i++) {
         const matter_device_t *dev = device_manager_get(i);
         if (!dev) continue;
+        // Skip devices from the other interface mode
+        if (s_interface_mode == INTERFACE_MODE_WIFI &&
+            dev->is_thread) continue;
+        if (s_interface_mode == INTERFACE_MODE_THREAD &&
+            !dev->is_thread) continue;
 
         lv_obj_t *card = lv_obj_create(dashboard_container);
         lv_obj_set_size(card, 140, 80);
@@ -1506,9 +1598,9 @@ static void refresh_dashboard(void) {
         lv_group_add_obj(grp_dashboard, card);
     }
 
-    if (lv_group_get_obj_count(grp_dashboard) > DASHBOARD_HEADER_BTNS) {
+    if (lv_group_get_obj_count(grp_dashboard) > dashboard_header_btns) {
         lv_group_focus_obj(lv_group_get_obj_by_index(
-            grp_dashboard, DASHBOARD_HEADER_BTNS));
+            grp_dashboard, dashboard_header_btns));
     } else {
         lv_group_focus_obj(lv_group_get_obj_by_index(
             grp_dashboard, 0));
@@ -1532,7 +1624,9 @@ static void create_commission_screen(void) {
     lv_obj_set_style_text_color(desc_label,
         lv_color_hex(0xAAAAAA), 0);
 
-    // Transport method row: Ethernet, BLE+WiFi, BLE+Thread
+    // Transport method row — filtered by interface mode
+    // WiFi mode: Ethernet(0), BLE+WiFi(1)
+    // Thread mode: BLE+Thread(2) only
     lv_obj_t *method_row = lv_obj_create(scr_commission);
     lv_obj_set_size(method_row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(method_row, LV_FLEX_FLOW_ROW);
@@ -1544,6 +1638,14 @@ static void create_commission_screen(void) {
         "Ethernet", "BLE+WiFi", "BLE+Thread"
     };
     for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
+        // Skip methods not available in current mode
+        bool visible = false;
+        if (s_interface_mode == INTERFACE_MODE_WIFI) {
+            visible = (i == 0 || i == 1);
+        } else {
+            visible = (i == 2);
+        }
+
         commission_method_radios[i] =
             lv_button_create(method_row);
         lv_obj_add_flag(commission_method_radios[i],
@@ -1586,10 +1688,21 @@ static void create_commission_screen(void) {
             lv_color_hex(0xFFFFFF),
             LV_PART_MAIN | LV_STATE_CHECKED);
         apply_focus_style(commission_method_radios[i]);
-        lv_group_add_obj(grp_commission,
-            commission_method_radios[i]);
+        if (visible) {
+            lv_group_add_obj(grp_commission,
+                commission_method_radios[i]);
+        } else {
+            lv_obj_add_flag(commission_method_radios[i],
+                LV_OBJ_FLAG_HIDDEN);
+        }
     }
+    // Default commission method based on mode
     commission_method = load_commission_method();
+    if (s_interface_mode == INTERFACE_MODE_THREAD) {
+        commission_method = 2;
+    } else if (commission_method == 2) {
+        commission_method = 0;
+    }
     lv_obj_add_state(commission_method_radios[commission_method],
         LV_STATE_CHECKED);
 
@@ -2049,9 +2162,6 @@ void ui_screens_init(void) {
     s_ui_event_queue = xQueueCreate(16, sizeof(matter_event_t));
 
     init_key_icons();
-    create_dashboard_screen();
-    create_commission_screen();
-    create_detail_screen();
 
     lv_indev_t *indev = NULL;
     while ((indev = lv_indev_get_next(indev)) != NULL) {
@@ -2061,10 +2171,30 @@ void ui_screens_init(void) {
         }
     }
 
+    s_event_timer = lv_timer_create(event_timer_cb, 100, NULL);
+
+    // Always show selection screen on boot
+    s_interface_mode = INTERFACE_MODE_NONE;
+    s_mode_selected_sem = xSemaphoreCreateBinary();
+    create_select_screen();
+    switch_to_screen(scr_select, grp_select);
+}
+
+interface_mode_t ui_wait_for_mode_selection(void) {
+    // Block until user picks a mode (LVGL callbacks give the sem)
+    xSemaphoreTake(s_mode_selected_sem, portMAX_DELAY);
+    vSemaphoreDelete(s_mode_selected_sem);
+    s_mode_selected_sem = NULL;
+    return s_interface_mode;
+}
+
+void ui_build_app_screens(void) {
+    if (scr_dashboard) return;
+    create_dashboard_screen();
+    create_commission_screen();
+    create_detail_screen();
     refresh_dashboard();
     switch_to_screen(scr_dashboard, grp_dashboard);
-
-    s_event_timer = lv_timer_create(event_timer_cb, 100, NULL);
 }
 
 void ui_post_event(matter_event_t event) {
@@ -2079,16 +2209,17 @@ void ui_update_device_state(uint64_t node_id) {
     if (dashboard_status_label) {
         int total = device_manager_count();
         int reachable = 0;
-        for (int i = 0; i < total; i++) {
-            const matter_device_t *d = device_manager_get(i);
-            if (d && d->reachable) reachable++;
-        }
-        // Don't count Thread devices when Thread radio is absent
-        bool thread_ok = matter_thread_available();
         int expected = 0;
         for (int i = 0; i < total; i++) {
             const matter_device_t *d = device_manager_get(i);
-            if (d && (!d->is_thread || thread_ok)) expected++;
+            if (!d) continue;
+            // Only count devices matching current interface mode
+            if (s_interface_mode == INTERFACE_MODE_WIFI &&
+                d->is_thread) continue;
+            if (s_interface_mode == INTERFACE_MODE_THREAD &&
+                !d->is_thread) continue;
+            expected++;
+            if (d->reachable) reachable++;
         }
 
         if (reachable >= expected) {

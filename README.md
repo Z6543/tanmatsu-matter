@@ -57,6 +57,10 @@ partitions.csv              - Partition table (OTA-capable, 6MB app partition)
 
 ## Prerequisites
 
+### Python 3.11
+
+ESP-IDF v5.5.1 requires Python 3.11. Ensure it is installed and available as `python3` before running the install scripts.
+
 ### Clone
 
 ESP-IDF (v5.5.1) and esp-matter (with Tanmatsu patches) are included as git submodules:
