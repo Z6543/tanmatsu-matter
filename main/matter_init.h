@@ -33,7 +33,9 @@ typedef struct {
 
 typedef void (*matter_event_cb_t)(matter_event_t event);
 
-esp_err_t matter_init(matter_event_cb_t cb);
+// Initialize Matter stack. When use_thread is true, probe RCP and
+// configure OpenThread. When false, skip Thread entirely.
+esp_err_t matter_init(matter_event_cb_t cb, bool use_thread);
 
 bool matter_thread_available(void);
 esp_err_t matter_start_thread_br(void);

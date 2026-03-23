@@ -239,41 +239,53 @@ static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr
     }
 }
 
-esp_err_t matter_init(matter_event_cb_t cb) {
+esp_err_t matter_init(matter_event_cb_t cb, bool use_thread) {
     s_event_cb = cb;
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
-    // Probe the RCP co-processor before configuring OpenThread.
-    // If absent, skip OT config so esp_matter::start() won't
-    // crash in SpinelDriver::ResetCoprocessor().
-    s_thread_available = probe_rcp_uart();
-    if (!s_thread_available) {
-        ESP_LOGW(TAG, "Thread radio (RCP) not detected on UART, "
-                 "proceeding without Thread support");
-    } else {
-        esp_netif_t *backbone = esp_netif_get_handle_from_ifkey(
-            "WIFI_STA_DEF");
-        if (backbone) {
-            esp_openthread_set_backbone_netif(backbone);
+    if (use_thread) {
+        // Probe the RCP co-processor before configuring OpenThread.
+        // If absent, skip OT config so esp_matter::start() won't
+        // crash in SpinelDriver::ResetCoprocessor().
+        s_thread_available = probe_rcp_uart();
+        if (!s_thread_available) {
+            ESP_LOGW(TAG, "Thread radio (RCP) not detected on "
+                     "UART, proceeding without Thread support");
         } else {
-            ESP_LOGW(TAG, "WiFi STA netif not found, border "
-                     "router may not work");
+            esp_netif_t *backbone = esp_netif_get_handle_from_ifkey(
+                "WIFI_STA_DEF");
+            if (backbone) {
+                esp_openthread_set_backbone_netif(backbone);
+            } else {
+                ESP_LOGW(TAG, "WiFi STA netif not found, border "
+                         "router may not work");
+            }
+
+            esp_openthread_register_rcp_failure_handler(
+                on_rcp_failure);
+            esp_openthread_set_compatibility_error_callback(
+                on_rcp_compat_error);
+            esp_openthread_set_coprocessor_reset_failure_callback(
+                on_rcp_reset_failure);
+
+            esp_openthread_platform_config_t ot_config = {
+                .radio_config =
+                    ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
+                .host_config =
+                    ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
+                .port_config =
+                    ESP_OPENTHREAD_DEFAULT_PORT_CONFIG(),
+            };
+            set_openthread_platform_config(&ot_config);
+            ESP_LOGI(TAG,
+                "OpenThread platform configured (UART RCP)");
         }
-
-        esp_openthread_register_rcp_failure_handler(on_rcp_failure);
-        esp_openthread_set_compatibility_error_callback(
-            on_rcp_compat_error);
-        esp_openthread_set_coprocessor_reset_failure_callback(
-            on_rcp_reset_failure);
-
-        esp_openthread_platform_config_t ot_config = {
-            .radio_config = ESP_OPENTHREAD_DEFAULT_RADIO_CONFIG(),
-            .host_config = ESP_OPENTHREAD_DEFAULT_HOST_CONFIG(),
-            .port_config = ESP_OPENTHREAD_DEFAULT_PORT_CONFIG(),
-        };
-        set_openthread_platform_config(&ot_config);
-        ESP_LOGI(TAG, "OpenThread platform configured (UART RCP)");
+    } else {
+        ESP_LOGI(TAG, "WiFi mode — skipping Thread/RCP init");
+        s_thread_available = false;
     }
+#else
+    (void)use_thread;
 #endif
 
     esp_err_t err = esp_matter::start(app_event_cb);
