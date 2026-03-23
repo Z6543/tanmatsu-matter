@@ -57,27 +57,34 @@ partitions.csv              - Partition table (OTA-capable, 6MB app partition)
 
 ## Prerequisites
 
-### ESP-IDF (v5.5)
+### Python 3.11
 
-Clone and install ESP-IDF:
+ESP-IDF v5.5.1 requires Python 3.11. Ensure it is installed and available as `python3` before running the install scripts.
+
+### Clone
+
+ESP-IDF (v5.5.1) and esp-matter (with Tanmatsu patches) are included as git submodules:
 
 ```bash
-git clone --recursive --branch v5.5 https://github.com/espressif/esp-idf.git --depth=1 --shallow-submodules
-cd esp-idf
+git clone --recursive https://github.com/Z6543/tanmatsu-matter.git
+cd tanmatsu-matter
+```
+
+If already cloned without `--recursive`:
+
+```bash
 git submodule update --init --recursive
+```
+
+### Install ESP-IDF toolchain
+
+```bash
+cd esp-idf
 ./install.sh all
 cd ..
 ```
 
-### esp-matter
-
-Clone and set up the esp-matter SDK. It must be located alongside this project (or wherever you point `ESP_MATTER_PATH`):
-
-```bash
-git clone --recursive https://github.com/nicola/esp-matter.git
-```
-
-Follow the [esp-matter setup guide](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/developing.html) to ensure all dependencies are installed.
+Follow the [esp-matter setup guide](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/developing.html) if you need additional esp-matter dependencies.
 
 ### tanmatsu-radio (Thread support)
 
@@ -93,40 +100,23 @@ make flash
 
 The RCP communicates Spinel HDLC frames over UART1 at 460800 baud. The UART pins are directly wired between the P4 and C6 (P4 GPIO54 ← C6 TX, P4 GPIO53 → C6 RX), so no extra wiring is needed.
 
-## Environment Setup
-
-Set the required environment variables and source the ESP-IDF export script. You can either use the `env` helper script or set them manually:
-
-### Option A: Using the `env` script
-
-If you have ESP-IDF and tools installed inside the project directory:
-
-```bash
-source env
-```
-
-### Option B: Manual setup
-
-```bash
-export IDF_PATH=/path/to/esp-idf
-export IDF_TOOLS_PATH=/path/to/esp-idf-tools
-export ESP_MATTER_PATH=/path/to/esp-matter
-
-source $IDF_PATH/export.sh
-```
-
 ## Building
 
-### Using Make (recommended)
+### Using build.sh (recommended)
 
-The included Makefile wraps the idf.py commands and handles environment sourcing:
+```bash
+zsh build.sh
+```
+
+This sources esp-idf, esp-matter, and pigweed exports from the submodules, then runs `idf.py -D DEVICE=tanmatsu build`.
+
+### Using Make
+
+The included Makefile wraps the idf.py commands:
 
 ```bash
 # Build for tanmatsu (default)
 make build
-
-# Build for a specific device
-make build DEVICE=tanmatsu
 
 # Full clean and rebuild
 make fullclean
@@ -138,9 +128,10 @@ make menuconfig
 
 ### Using idf.py directly
 
-After sourcing the environment:
-
 ```bash
+source esp-idf/export.sh
+export ESP_MATTER_PATH="$(pwd)/esp-matter"
+source $ESP_MATTER_PATH/export.sh
 idf.py -D DEVICE=tanmatsu build
 ```
 
