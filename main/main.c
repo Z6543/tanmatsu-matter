@@ -22,6 +22,12 @@
 
 static char const TAG[] = "main";
 
+// esp-hosted-tanmatsu calls hosted_reset_slave_callback() to reset the C6 radio.
+// tanmatsu-wifi provides the implementation as hosted_sdio_reset_slave_callback().
+// Bridge the naming gap here (user-code callback per the Kconfig documentation).
+extern esp_err_t hosted_sdio_reset_slave_callback(void);
+int hosted_reset_slave_callback(void) { return (int)hosted_sdio_reset_slave_callback(); }
+
 static esp_lcd_panel_handle_t       display_lcd_panel    = NULL;
 static esp_lcd_panel_io_handle_t    display_lcd_panel_io = NULL;
 static size_t                       display_h_res        = 0;
