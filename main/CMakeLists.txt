@@ -4,6 +4,11 @@ idf_component_register(
 		"device_manager.c"
 		"sdcard.c"
 		"ui_screens.c"
+		"camera_qr.c"
+		"quirc/quirc.c"
+		"quirc/identify.c"
+		"quirc/decode.c"
+		"quirc/version_db.c"
 		"matter_init.cpp"
 		"matter_commission.cpp"
 		"matter_device_control.cpp"
@@ -26,8 +31,12 @@ idf_component_register(
 		esp_wifi
 		openthread
 		espressif__mdns
+		esp_driver_cam
+		esp_driver_isp
+		espressif__esp_cam_sensor
 	INCLUDE_DIRS
 		"."
+		"quirc"
 	EMBED_FILES
 		"icons/esc.png"
 		"icons/f1.png"

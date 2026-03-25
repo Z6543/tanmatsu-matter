@@ -7,3 +7,4 @@ dependencies:
     version: badge
   espressif/libpng: "^1.6.39~1"
   nicolaielectronics/tanmatsu-wifi: "^1.1.2"
+  espressif/esp_cam_sensor: ">=1.0.0"

@@ -8,7 +8,7 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://nico
   - Setup PIN Code (on-network)
   - Discriminator + Passcode
   - Manual Pairing Code
-  - QR Code payload
+  - QR Code payload (type manually or **scan with the built-in camera**)
   - BLE + WiFi (discover over BLE, provision WiFi credentials)
   - BLE + Thread (discover over BLE, provision Thread network credentials)
 - Thread Border Router using the ESP32-C6 IEEE 802.15.4 radio as an OpenThread RCP
@@ -23,6 +23,7 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://nico
 - **Main SoC**: ESP32-P4 (with PSRAM, 16MB flash)
 - **Radio co-processor**: ESP32-C6 via ESP-Hosted (SDIO transport for WiFi/BLE, UART for Thread RCP)
 - **Display**: DSI LCD panel via LVGL
+- **Camera**: OV5647 MIPI CSI (2-lane, 800×640 @ 50fps) — used for QR code scanning
 - **Input**: Keypad/encoder (navigated via LVGL input groups)
 
 WiFi and BLE are provided by the ESP32-C6 co-processor over SDIO. The WiFi stack is managed by the tanmatsu wifi-manager component, not by the CHIP/Matter stack.
@@ -38,6 +39,8 @@ main/
   bsp_lvgl.c/h              - LVGL display and input driver setup
   matter_init.cpp/h         - Matter stack and commissioner initialization
   matter_commission.cpp/h   - Commissioning (PIN, QR, BLE+WiFi, BLE+Thread)
+  camera_qr.c/h             - OV5647 camera init + quirc QR decode loop
+  quirc/                    - Vendored quirc QR library (PSRAM-patched for ESP32)
   matter_device_control.cpp/h - Device control (on/off/toggle, subscriptions)
   device_manager.c/h        - Device persistence (NVS storage)
   matter_project_config.h   - CHIP project configuration overrides
@@ -163,6 +166,7 @@ UART console output is enabled by default (`CONFIG_ESP_CONSOLE_UART_DEFAULT=y`).
 3. Press **+ Add** to commission a new device:
    - Choose a **transport**: Ethernet (on-network), BLE+WiFi, or BLE+Thread
    - Choose an **input mode**: QR code payload, manual pairing code, discriminator+passcode, or PIN code (PIN only for Ethernet)
+   - When **QR Code** input mode is selected, press **Scan QR** to open a live camera preview. Point the camera at the device's QR code — the payload is detected automatically and fills the code field.
    - Enter a device name and press **Start Commissioning**
 4. Commissioned devices appear as cards on the dashboard
    - **Enter**: Toggle the device on/off
@@ -184,6 +188,7 @@ Notable sdkconfig settings in `sdkconfigs/tanmatsu`:
 | `CONFIG_OPENTHREAD_BORDER_ROUTER` | `y` | Enable Thread Border Router (ESP32-C6 RCP) |
 | `CONFIG_OPENTHREAD_RADIO_SPINEL_UART` | `y` | Spinel over UART to C6 RCP |
 | `CONFIG_OPENTHREAD_FTD` | `y` | Full Thread Device (required for border router) |
+| `CONFIG_CAMERA_OV5647` | `y` | Enable OV5647 MIPI CSI camera driver |
 
 ## Device Attestation Certificates
 

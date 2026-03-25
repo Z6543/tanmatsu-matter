@@ -36,6 +36,15 @@ set(EXTRA_COMPONENT_DIRS
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(matter)
 
+# Tanmatsu uses nicolaielectronics__esp-hosted-tanmatsu (a fork with SDIO/RPC patches).
+# Replace espressif__esp_hosted sources with a dummy file so the target is a valid
+# but empty static library — this prevents duplicate symbol conflicts since the
+# tanmatsu fork provides all required symbols.
+if(TARGET __idf_espressif__esp_hosted)
+	file(WRITE "${CMAKE_BINARY_DIR}/__esp_hosted_dummy.c" "/* replaced by nicolaielectronics__esp-hosted-tanmatsu */\n")
+	set_property(TARGET __idf_espressif__esp_hosted PROPERTY SOURCES "${CMAKE_BINARY_DIR}/__esp_hosted_dummy.c")
+endif()
+
 idf_build_set_property(CXX_COMPILE_OPTIONS "-std=gnu++17;-Os;-DCHIP_HAVE_CONFIG_H;-Wno-overloaded-virtual" APPEND)
 idf_build_set_property(C_COMPILE_OPTIONS "-Os" APPEND)
 idf_build_set_property(COMPILE_OPTIONS "-D_NO_GENERIC_THREAD_NETWORK_COMMISSIONING_DRIVER_" APPEND)
