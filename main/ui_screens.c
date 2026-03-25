@@ -1,4 +1,5 @@
 #include "ui_screens.h"
+#include "camera_qr.h"
 #include "device_manager.h"
 #include "matter_commission.h"
 #include "matter_device_control.h"
@@ -21,6 +22,8 @@
 #include "esp_heap_caps.h"
 #endif
 
+static const char *TAG = "ui_screens";
+
 // Event queue for Matter -> UI communication
 static QueueHandle_t s_ui_event_queue = NULL;
 
@@ -32,12 +35,14 @@ static lv_obj_t *scr_select = NULL;
 static lv_obj_t *scr_dashboard = NULL;
 static lv_obj_t *scr_commission = NULL;
 static lv_obj_t *scr_detail = NULL;
+static lv_obj_t *scr_camera = NULL;
 
 // Per-screen input groups
 static lv_group_t *grp_select = NULL;
 static lv_group_t *grp_dashboard = NULL;
 static lv_group_t *grp_commission = NULL;
 static lv_group_t *grp_detail = NULL;
+static lv_group_t *grp_camera = NULL;
 
 // Dashboard widgets
 static lv_obj_t *dashboard_container = NULL;
@@ -48,9 +53,13 @@ static lv_obj_t *dashboard_spinner = NULL;
 // Number of fixed header buttons in grp_dashboard (mode-dependent)
 static int dashboard_header_btns = 0;
 
+// Camera preview canvas (lives on scr_camera)
+static lv_obj_t *camera_canvas = NULL;
+
 // Commission widgets
 // 0=Ethernet, 1=BLE+WiFi, 2=BLE+Thread
 #define NUM_COMMISSION_METHODS 3
+static lv_obj_t *commission_scan_btn = NULL;
 static lv_obj_t *commission_method_radios[NUM_COMMISSION_METHODS] = {};
 static lv_obj_t *commission_code_ta = NULL;
 static lv_obj_t *commission_disc_ta = NULL;
@@ -105,6 +114,7 @@ static void create_select_screen(void);
 static void create_dashboard_screen(void);
 static void create_commission_screen(void);
 static void create_detail_screen(void);
+static void create_camera_screen(void);
 static void refresh_dashboard(void);
 static void show_detail_for_device(uint64_t node_id);
 static void apply_focus_style(lv_obj_t *obj);
@@ -600,6 +610,41 @@ static void show_toast(const char *msg) {
     lv_timer_set_repeat_count(s_toast_timer, 1);
 }
 
+// ---- Camera QR scan callbacks ----
+
+static void btn_cancel_scan_cb(lv_event_t *e) {
+    (void)e;
+    camera_qr_stop();
+    switch_to_screen(scr_commission, grp_commission);
+    lv_group_focus_obj(commission_code_ta);
+}
+
+static void camera_key_cb(lv_event_t *e) {
+    uint32_t key = lv_event_get_key(e);
+    if (key == LV_KEY_ESC) btn_cancel_scan_cb(e);
+}
+
+static void on_qr_result(const char *payload) {
+    // Called from LVGL timer context — safe to update UI directly
+    if (commission_code_ta) {
+        lv_textarea_set_text(commission_code_ta, payload);
+    }
+    // camera_qr_stop() was already called internally before this callback
+    switch_to_screen(scr_commission, grp_commission);
+    lv_group_focus_obj(commission_code_ta);
+}
+
+static void btn_scan_qr_cb(lv_event_t *e) {
+    (void)e;
+    if (!scr_camera) return;
+    switch_to_screen(scr_camera, grp_camera);
+    esp_err_t err = camera_qr_start(on_qr_result, camera_canvas);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "camera_qr_start failed: %s", esp_err_to_name(err));
+        switch_to_screen(scr_commission, grp_commission);
+    }
+}
+
 static void update_commission_fields(void) {
     // PIN input mode only available for Ethernet
     if (commission_input == 3 && commission_method != 0) {
@@ -651,6 +696,15 @@ static void update_commission_fields(void) {
         code_labels[commission_input]);
     lv_textarea_set_placeholder_text(commission_code_ta,
         code_placeholders[commission_input]);
+
+    // Show Scan QR button only in QR Code input mode
+    if (commission_scan_btn) {
+        if (commission_input == 0) {
+            lv_obj_clear_flag(commission_scan_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(commission_scan_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void method_radio_cb(lv_event_t *e) {
@@ -1821,12 +1875,32 @@ static void create_commission_screen(void) {
     commission_code_label = lv_label_create(scr_commission);
     lv_label_set_text(commission_code_label, "Setup PIN Code:");
 
-    commission_code_ta = lv_textarea_create(scr_commission);
+    // Row: [code textarea (grow)] + [Scan QR button, QR mode only]
+    lv_obj_t *code_row = lv_obj_create(scr_commission);
+    lv_obj_set_size(code_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(code_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(code_row, LV_FLEX_ALIGN_START,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(code_row, 0, 0);
+    lv_obj_set_style_pad_gap(code_row, 4, 0);
+    lv_obj_set_style_border_width(code_row, 0, 0);
+    lv_obj_set_style_bg_opa(code_row, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(code_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    commission_code_ta = lv_textarea_create(code_row);
     lv_textarea_set_one_line(commission_code_ta, true);
     lv_textarea_set_placeholder_text(commission_code_ta, "e.g. 20212020");
-    lv_obj_set_width(commission_code_ta, LV_PCT(100));
+    lv_obj_set_flex_grow(commission_code_ta, 1);
     apply_focus_style(commission_code_ta);
     lv_group_add_obj(grp_commission, commission_code_ta);
+
+    commission_scan_btn = lv_button_create(code_row);
+    lv_obj_t *scan_lbl = lv_label_create(commission_scan_btn);
+    lv_label_set_text(scan_lbl, LV_SYMBOL_IMAGE " Scan QR");
+    lv_obj_add_event_cb(commission_scan_btn, btn_scan_qr_cb,
+        LV_EVENT_CLICKED, NULL);
+    apply_focus_style(commission_scan_btn);
+    lv_group_add_obj(grp_commission, commission_scan_btn);
 
     lv_obj_t *name_label = lv_label_create(scr_commission);
     lv_label_set_text(name_label, "Device Name:");
@@ -1884,6 +1958,45 @@ static void create_commission_screen(void) {
     hint_add_text(comm_hints, "Screenshot");
 
     update_commission_fields();
+}
+
+static void create_camera_screen(void) {
+    grp_camera = lv_group_create();
+
+    scr_camera = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr_camera, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_pad_all(scr_camera, 0, 0);
+    lv_obj_clear_flag(scr_camera, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Full-screen canvas for camera preview
+    camera_canvas = lv_canvas_create(scr_camera);
+    lv_obj_set_size(camera_canvas, CAM_QR_DISP_W, CAM_QR_DISP_H);
+    lv_obj_set_pos(camera_canvas, 0, 0);
+
+    // Status label: bottom center, translucent background
+    lv_obj_t *status_lbl = lv_label_create(scr_camera);
+    lv_label_set_text(status_lbl, "Searching for Matter QR code...");
+    lv_obj_set_style_text_color(status_lbl,
+        lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(status_lbl,
+        lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(status_lbl, LV_OPA_60, 0);
+    lv_obj_set_style_pad_hor(status_lbl, 10, 0);
+    lv_obj_set_style_pad_ver(status_lbl, 4, 0);
+    lv_obj_set_style_radius(status_lbl, 4, 0);
+    lv_obj_align(status_lbl, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+    // Cancel button: bottom right, focusable
+    lv_obj_t *cancel_btn = lv_button_create(scr_camera);
+    lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_lbl, LV_SYMBOL_CLOSE " Cancel");
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -8);
+    lv_obj_add_event_cb(cancel_btn, btn_cancel_scan_cb,
+        LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(cancel_btn, camera_key_cb,
+        LV_EVENT_KEY, NULL);
+    apply_focus_style(cancel_btn);
+    lv_group_add_obj(grp_camera, cancel_btn);
 }
 
 static void create_detail_screen(void) {
@@ -2193,6 +2306,7 @@ void ui_build_app_screens(void) {
     create_dashboard_screen();
     create_commission_screen();
     create_detail_screen();
+    create_camera_screen();
     refresh_dashboard();
     switch_to_screen(scr_dashboard, grp_dashboard);
 }
