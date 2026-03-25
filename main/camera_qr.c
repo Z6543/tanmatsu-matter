@@ -38,9 +38,6 @@ static const char *TAG = "camera_qr";
 #define CAM_SCCB_FREQ_HZ   10000
 #define CAM_BPP            2
 
-#define QR_W               (CAM_W / 2)
-#define QR_H               (CAM_H / 2)
-
 #define CAM_CROP_ROW_OFFSET ((CAM_H - CAM_QR_DISP_H) / 2)
 
 typedef struct {
@@ -197,7 +194,7 @@ static void camera_qr_task(void *arg)
         ESP_LOGE(TAG, "Failed to allocate quirc decoder");
         goto cleanup;
     }
-    if (quirc_resize(qr, QR_W, QR_H) != 0) {
+    if (quirc_resize(qr, CAM_W, CAM_H) != 0) {
         ESP_LOGE(TAG, "Failed to resize quirc decoder");
         goto cleanup;
     }
@@ -258,18 +255,28 @@ static void camera_qr_task(void *arg)
 
         if (s_ctx.stop_flag) break;
 
-        // Feed 2x-downsampled frame to quirc as grayscale
+        // Convert full frame to grayscale for quirc
         uint8_t *gray = quirc_begin(qr, NULL, NULL);
-        for (int y = 0; y < QR_H; y++) {
-            const uint16_t *row0 = frame + (y * 2) * CAM_W;
-            const uint16_t *row1 = row0 + CAM_W;
-            for (int x = 0; x < QR_W; x++) {
-                int x2 = x * 2;
-                uint16_t g = rgb565_to_gray(row0[x2])
-                           + rgb565_to_gray(row0[x2 + 1])
-                           + rgb565_to_gray(row1[x2])
-                           + rgb565_to_gray(row1[x2 + 1]);
-                gray[y * QR_W + x] = (uint8_t)(g >> 2);
+        for (int i = 0; i < CAM_W * CAM_H; i++) {
+            gray[i] = rgb565_to_gray(frame[i]);
+        }
+
+        // Contrast stretch: map [min..max] → [0..255] to maximize
+        // dynamic range for quirc's adaptive threshold. Helps with
+        // low-contrast / washed-out images from the camera.
+        {
+            uint8_t g_min = 255, g_max = 0;
+            int total = CAM_W * CAM_H;
+            for (int i = 0; i < total; i++) {
+                if (gray[i] < g_min) g_min = gray[i];
+                if (gray[i] > g_max) g_max = gray[i];
+            }
+            uint8_t range = g_max - g_min;
+            if (range > 0 && range < 200) {
+                for (int i = 0; i < total; i++) {
+                    gray[i] = (uint8_t)(
+                        ((uint16_t)(gray[i] - g_min) * 255) / range);
+                }
             }
         }
 
@@ -278,7 +285,7 @@ static void camera_qr_task(void *arg)
             uint8_t g_min = 255, g_max = 0;
             uint32_t g_sum = 0;
             uint32_t hist_lo = 0, hist_mid = 0, hist_hi = 0;
-            int total = QR_W * QR_H;
+            int total = CAM_W * CAM_H;
             for (int i = 0; i < total; i++) {
                 uint8_t g = gray[i];
                 if (g < g_min) g_min = g;
@@ -289,11 +296,11 @@ static void camera_qr_task(void *arg)
                 else hist_hi++;
             }
             uint8_t g_mean = (uint8_t)(g_sum / total);
-            int cx = QR_W / 2, cy = QR_H / 2;
+            int cx = CAM_W / 2, cy = CAM_H / 2;
             ESP_LOGI(TAG, "[DBG] Gray stats frame %lu (%dx%d): "
                      "min=%u max=%u mean=%u contrast=%u "
                      "hist[0-84]=%lu [85-169]=%lu [170-255]=%lu",
-                     (unsigned long)frame_count, QR_W, QR_H,
+                     (unsigned long)frame_count, CAM_W, CAM_H,
                      g_min, g_max, g_mean,
                      (unsigned)(g_max - g_min),
                      (unsigned long)hist_lo,
@@ -303,21 +310,21 @@ static void camera_qr_task(void *arg)
                      "[%u %u %u %u %u] "
                      "[%u %u %u %u %u] "
                      "[%u %u %u %u %u]",
-                     gray[(cy-1)*QR_W+cx-2],
-                     gray[(cy-1)*QR_W+cx-1],
-                     gray[(cy-1)*QR_W+cx],
-                     gray[(cy-1)*QR_W+cx+1],
-                     gray[(cy-1)*QR_W+cx+2],
-                     gray[cy*QR_W+cx-2],
-                     gray[cy*QR_W+cx-1],
-                     gray[cy*QR_W+cx],
-                     gray[cy*QR_W+cx+1],
-                     gray[cy*QR_W+cx+2],
-                     gray[(cy+1)*QR_W+cx-2],
-                     gray[(cy+1)*QR_W+cx-1],
-                     gray[(cy+1)*QR_W+cx],
-                     gray[(cy+1)*QR_W+cx+1],
-                     gray[(cy+1)*QR_W+cx+2]);
+                     gray[(cy-1)*CAM_W+cx-2],
+                     gray[(cy-1)*CAM_W+cx-1],
+                     gray[(cy-1)*CAM_W+cx],
+                     gray[(cy-1)*CAM_W+cx+1],
+                     gray[(cy-1)*CAM_W+cx+2],
+                     gray[cy*CAM_W+cx-2],
+                     gray[cy*CAM_W+cx-1],
+                     gray[cy*CAM_W+cx],
+                     gray[cy*CAM_W+cx+1],
+                     gray[cy*CAM_W+cx+2],
+                     gray[(cy+1)*CAM_W+cx-2],
+                     gray[(cy+1)*CAM_W+cx-1],
+                     gray[(cy+1)*CAM_W+cx],
+                     gray[(cy+1)*CAM_W+cx+1],
+                     gray[(cy+1)*CAM_W+cx+2]);
         }
 
         quirc_end(qr);
