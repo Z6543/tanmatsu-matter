@@ -76,15 +76,13 @@ If already cloned without `--recursive`:
 git submodule update --init --recursive
 ```
 
-### Install ESP-IDF toolchain
+### Install toolchains
+
+Run the bootstrap script to install both the ESP-IDF toolchain and esp-matter dependencies in one step:
 
 ```bash
-cd esp-idf
-./install.sh all
-cd ..
+zsh bootstrap.sh
 ```
-
-Follow the [esp-matter setup guide](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/developing.html) if you need additional esp-matter dependencies.
 
 ### tanmatsu-radio (Thread support)
 
@@ -262,6 +260,14 @@ To transfer a dataset from another Thread border router:
 4. Reboot the device — the border router will use the stored dataset
 
 If no dataset exists in NVS on boot, the app creates one automatically from the sdkconfig defaults (`esp_openthread_auto_start`).
+
+## Known Limitations
+
+- **Thread/WiFi coexistence** — enabling the Thread border router can cause WiFi to disconnect. Root cause is in the ESP32-C6 radio firmware / ESP-Hosted transport; not fixable at the application level.
+- **Thread re-commissioning** — commissioning a Thread device already joined to a different Thread network/fabric (via manual pairing mode) fails for unknown reasons.
+- **Device limit** — a maximum of 5 devices can be commissioned. Increasing this requires evaluating PSRAM and NVS impact.
+- **Subscription loss** — if a subscribed device goes offline, it is not automatically marked unreachable and re-subscribe on reconnect is not yet implemented.
+- **NVS struct layout** — device state is persisted as a raw struct blob. Adding fields to `matter_device_t` will break existing NVS data and require a manual NVS erase.
 
 ## License
 
