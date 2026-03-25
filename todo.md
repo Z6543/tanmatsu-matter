@@ -3,10 +3,10 @@
 - [ ] **If a Thread device is already commissioned to another TBR on another Thread network, and we want to commission it into our Matter fabric by putting the device into manual pairing mode, commission will fail for unknown reasons
 - [ ] **Add OV5647 camera support for QR code reading
 - [ ] **Implement W5500 for Ethernet support
-- [ ] **Warn if test device is onboarded
-- [ ] **Thread and WiFi does not work well together right now, e.g. using Thread makes WiFi to disconnect.
-- [ ] **For slider type GUI elements, one keypress should move slider with 10 unit, and shift+arrow should move it 1 unit
-- [ ] **BLE commissioning fails due to NimBLE GATT procedure conflict** — `HandleGAPConnect` in `BLEManagerImpl.cpp` calls `ble_gattc_exchange_mtu` then immediately starts GATT discovery via `peer_disc_all`. NimBLE only allows one GATT procedure per connection, causing `BLE_HS_EBUSY` → `CHIP_ERROR_INTERNAL` (0xAC) → full BLE stack teardown. Patched locally by deferring MTU exchange to `OnGattDiscComplete`. Needs upstream fix or permanent local patch management.
+- [x] **Warn if test device is onboarded
+- [ ] **Thread and WiFi coexistence** — using Thread causes WiFi to disconnect. Root cause is in ESP32-C6 radio firmware / ESP-Hosted; not fixable at application level.
+- [x] **For slider type GUI elements, one keypress should move slider with 10 unit, and shift+arrow should move it 1 unit
+- [x] **BLE commissioning fails due to NimBLE GATT procedure conflict** — patched in `BLEManagerImpl.cpp`: MTU exchange deferred to `OnGattDiscComplete` to avoid `BLE_HS_EBUSY`. Patch lives in Z6543/connectedhomeip `tanmatsu` branch.
 
 ## Low prio
 
