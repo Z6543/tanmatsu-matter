@@ -25,6 +25,7 @@
 #include "bsp_lvgl.h"
 
 #include "quirc/quirc.h"
+#include "quirc/quirc_internal.h"
 
 #include <string.h>
 
@@ -36,6 +37,9 @@ static const char *TAG = "camera_qr";
 #define CAM_FORMAT_NAME    "MIPI_2lane_24Minput_RAW8_800x640_50fps"
 #define CAM_SCCB_FREQ_HZ   10000
 #define CAM_BPP            2
+
+#define QR_W               (CAM_W / 2)
+#define QR_H               (CAM_H / 2)
 
 #define CAM_CROP_ROW_OFFSET ((CAM_H - CAM_QR_DISP_H) / 2)
 
@@ -193,7 +197,7 @@ static void camera_qr_task(void *arg)
         ESP_LOGE(TAG, "Failed to allocate quirc decoder");
         goto cleanup;
     }
-    if (quirc_resize(qr, CAM_W, CAM_H) != 0) {
+    if (quirc_resize(qr, QR_W, QR_H) != 0) {
         ESP_LOGE(TAG, "Failed to resize quirc decoder");
         goto cleanup;
     }
@@ -254,23 +258,92 @@ static void camera_qr_task(void *arg)
 
         if (s_ctx.stop_flag) break;
 
-        // Feed full frame to quirc as grayscale
+        // Feed 2x-downsampled frame to quirc as grayscale
         uint8_t *gray = quirc_begin(qr, NULL, NULL);
-        for (int i = 0; i < CAM_W * CAM_H; i++) {
-            gray[i] = rgb565_to_gray(frame[i]);
+        for (int y = 0; y < QR_H; y++) {
+            const uint16_t *row0 = frame + (y * 2) * CAM_W;
+            const uint16_t *row1 = row0 + CAM_W;
+            for (int x = 0; x < QR_W; x++) {
+                int x2 = x * 2;
+                uint16_t g = rgb565_to_gray(row0[x2])
+                           + rgb565_to_gray(row0[x2 + 1])
+                           + rgb565_to_gray(row1[x2])
+                           + rgb565_to_gray(row1[x2 + 1]);
+                gray[y * QR_W + x] = (uint8_t)(g >> 2);
+            }
         }
+
+        // Debug: grayscale image statistics (every 50 frames)
+        if ((frame_count % 50) == 1) {
+            uint8_t g_min = 255, g_max = 0;
+            uint32_t g_sum = 0;
+            uint32_t hist_lo = 0, hist_mid = 0, hist_hi = 0;
+            int total = QR_W * QR_H;
+            for (int i = 0; i < total; i++) {
+                uint8_t g = gray[i];
+                if (g < g_min) g_min = g;
+                if (g > g_max) g_max = g;
+                g_sum += g;
+                if (g < 85) hist_lo++;
+                else if (g < 170) hist_mid++;
+                else hist_hi++;
+            }
+            uint8_t g_mean = (uint8_t)(g_sum / total);
+            int cx = QR_W / 2, cy = QR_H / 2;
+            ESP_LOGI(TAG, "[DBG] Gray stats frame %lu (%dx%d): "
+                     "min=%u max=%u mean=%u contrast=%u "
+                     "hist[0-84]=%lu [85-169]=%lu [170-255]=%lu",
+                     (unsigned long)frame_count, QR_W, QR_H,
+                     g_min, g_max, g_mean,
+                     (unsigned)(g_max - g_min),
+                     (unsigned long)hist_lo,
+                     (unsigned long)hist_mid,
+                     (unsigned long)hist_hi);
+            ESP_LOGI(TAG, "[DBG] Center pixels: "
+                     "[%u %u %u %u %u] "
+                     "[%u %u %u %u %u] "
+                     "[%u %u %u %u %u]",
+                     gray[(cy-1)*QR_W+cx-2],
+                     gray[(cy-1)*QR_W+cx-1],
+                     gray[(cy-1)*QR_W+cx],
+                     gray[(cy-1)*QR_W+cx+1],
+                     gray[(cy-1)*QR_W+cx+2],
+                     gray[cy*QR_W+cx-2],
+                     gray[cy*QR_W+cx-1],
+                     gray[cy*QR_W+cx],
+                     gray[cy*QR_W+cx+1],
+                     gray[cy*QR_W+cx+2],
+                     gray[(cy+1)*QR_W+cx-2],
+                     gray[(cy+1)*QR_W+cx-1],
+                     gray[(cy+1)*QR_W+cx],
+                     gray[(cy+1)*QR_W+cx+1],
+                     gray[(cy+1)*QR_W+cx+2]);
+        }
+
         quirc_end(qr);
 
         int n_codes = quirc_count(qr);
-        if (n_codes > 0) {
-            ESP_LOGI(TAG, "[DBG] quirc found %d codes", n_codes);
+        if (n_codes > 0 || (frame_count % 50) == 1) {
+            ESP_LOGI(TAG, "[DBG] quirc frame %lu: codes=%d "
+                     "regions=%d capstones=%d grids=%d",
+                     (unsigned long)frame_count, n_codes,
+                     qr->num_regions,
+                     qr->num_capstones,
+                     qr->num_grids);
         }
 
         for (int ci = 0; ci < n_codes && !s_ctx.stop_flag; ci++) {
             struct quirc_code code;
             struct quirc_data data;
             quirc_extract(qr, ci, &code);
-            if (quirc_decode(&code, &data) != QUIRC_SUCCESS) continue;
+            quirc_decode_error_t dec_err = quirc_decode(&code, &data);
+            if (dec_err != QUIRC_SUCCESS) {
+                ESP_LOGW(TAG, "[DBG] quirc decode[%d] failed: %s "
+                         "(size=%d ver=%d)",
+                         ci, quirc_strerror(dec_err),
+                         code.size, data.version);
+                continue;
+            }
 
             const char *payload = (const char *)data.payload;
             ESP_LOGI(TAG, "[DBG] QR payload: %.64s", payload);
