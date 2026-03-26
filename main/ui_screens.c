@@ -1325,6 +1325,7 @@ static lv_obj_t *select_status_row = NULL;
 static lv_obj_t *select_status_label = NULL;
 static lv_obj_t *select_wifi_btn = NULL;
 static lv_obj_t *select_thread_btn = NULL;
+static lv_obj_t *select_ethernet_btn = NULL;
 
 static void show_select_loading(const char *mode_name) {
     // Disable buttons so the user can't double-tap
@@ -1333,6 +1334,9 @@ static void show_select_loading(const char *mode_name) {
     }
     if (select_thread_btn) {
         lv_obj_add_state(select_thread_btn, LV_STATE_DISABLED);
+    }
+    if (select_ethernet_btn) {
+        lv_obj_add_state(select_ethernet_btn, LV_STATE_DISABLED);
     }
     // Show spinner + status
     if (select_status_row) {
@@ -1364,6 +1368,15 @@ static void select_thread_cb(lv_event_t *e) {
     }
 }
 
+static void select_ethernet_cb(lv_event_t *e) {
+    (void)e;
+    s_interface_mode = INTERFACE_MODE_ETHERNET;
+    show_select_loading("Ethernet");
+    if (s_mode_selected_sem) {
+        xSemaphoreGive(s_mode_selected_sem);
+    }
+}
+
 static void create_select_screen(void) {
     grp_select = lv_group_create();
 
@@ -1388,7 +1401,7 @@ static void create_select_screen(void) {
         lv_color_hex(0xAAAAAA), 0);
 
     select_wifi_btn = lv_button_create(scr_select);
-    lv_obj_set_size(select_wifi_btn, 320, 70);
+    lv_obj_set_size(select_wifi_btn, 320, 54);
     lv_obj_set_flex_flow(select_wifi_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(select_wifi_btn,
         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
@@ -1409,7 +1422,7 @@ static void create_select_screen(void) {
     lv_group_add_obj(grp_select, select_wifi_btn);
 
     select_thread_btn = lv_button_create(scr_select);
-    lv_obj_set_size(select_thread_btn, 320, 70);
+    lv_obj_set_size(select_thread_btn, 320, 54);
     lv_obj_set_flex_flow(select_thread_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(select_thread_btn,
         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
@@ -1428,6 +1441,27 @@ static void create_select_screen(void) {
         select_thread_cb, LV_EVENT_CLICKED, NULL);
     apply_focus_style(select_thread_btn);
     lv_group_add_obj(grp_select, select_thread_btn);
+
+    select_ethernet_btn = lv_button_create(scr_select);
+    lv_obj_set_size(select_ethernet_btn, 320, 54);
+    lv_obj_set_flex_flow(select_ethernet_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(select_ethernet_btn,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_color(select_ethernet_btn,
+        lv_color_hex(0x6A1B9A), 0);
+    lv_obj_t *eth_lbl = lv_label_create(select_ethernet_btn);
+    lv_label_set_text(eth_lbl,
+        LV_SYMBOL_DOWNLOAD " Ethernet");
+    lv_obj_t *eth_desc = lv_label_create(select_ethernet_btn);
+    lv_label_set_text(eth_desc,
+        "W5500 wired, on-network devices");
+    lv_obj_set_style_text_color(eth_desc,
+        lv_color_hex(0xE1BEE7), 0);
+    lv_obj_add_event_cb(select_ethernet_btn,
+        select_ethernet_cb, LV_EVENT_CLICKED, NULL);
+    apply_focus_style(select_ethernet_btn);
+    lv_group_add_obj(grp_select, select_ethernet_btn);
 
     lv_obj_t *note = lv_label_create(scr_select);
     lv_label_set_text(note,
@@ -1486,9 +1520,13 @@ static void create_dashboard_screen(void) {
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(header);
-    const char *mode_label = (s_interface_mode == INTERFACE_MODE_THREAD)
-        ? LV_SYMBOL_HOME " Matter [Thread]"
-        : LV_SYMBOL_HOME " Matter [WiFi]";
+    const char *mode_label;
+    if (s_interface_mode == INTERFACE_MODE_THREAD)
+        mode_label = LV_SYMBOL_HOME " Matter [Thread]";
+    else if (s_interface_mode == INTERFACE_MODE_ETHERNET)
+        mode_label = LV_SYMBOL_HOME " Matter [Ethernet]";
+    else
+        mode_label = LV_SYMBOL_HOME " Matter [WiFi]";
     lv_label_set_text(title, mode_label);
     lv_obj_set_flex_grow(title, 1);
 
@@ -1561,7 +1599,8 @@ static void refresh_dashboard(void) {
     for (int i = 0; i < count; i++) {
         const matter_device_t *d = device_manager_get(i);
         if (!d) continue;
-        if (s_interface_mode == INTERFACE_MODE_WIFI &&
+        if ((s_interface_mode == INTERFACE_MODE_WIFI ||
+             s_interface_mode == INTERFACE_MODE_ETHERNET) &&
             d->is_thread) continue;
         if (s_interface_mode == INTERFACE_MODE_THREAD &&
             !d->is_thread) continue;
@@ -1581,7 +1620,8 @@ static void refresh_dashboard(void) {
         const matter_device_t *dev = device_manager_get(i);
         if (!dev) continue;
         // Skip devices from the other interface mode
-        if (s_interface_mode == INTERFACE_MODE_WIFI &&
+        if ((s_interface_mode == INTERFACE_MODE_WIFI ||
+             s_interface_mode == INTERFACE_MODE_ETHERNET) &&
             dev->is_thread) continue;
         if (s_interface_mode == INTERFACE_MODE_THREAD &&
             !dev->is_thread) continue;
@@ -1694,7 +1734,9 @@ static void create_commission_screen(void) {
     for (int i = 0; i < NUM_COMMISSION_METHODS; i++) {
         // Skip methods not available in current mode
         bool visible = false;
-        if (s_interface_mode == INTERFACE_MODE_WIFI) {
+        if (s_interface_mode == INTERFACE_MODE_ETHERNET) {
+            visible = (i == 0);
+        } else if (s_interface_mode == INTERFACE_MODE_WIFI) {
             visible = (i == 0 || i == 1);
         } else {
             visible = (i == 2);
@@ -1754,6 +1796,8 @@ static void create_commission_screen(void) {
     commission_method = load_commission_method();
     if (s_interface_mode == INTERFACE_MODE_THREAD) {
         commission_method = 2;
+    } else if (s_interface_mode == INTERFACE_MODE_ETHERNET) {
+        commission_method = 0;
     } else if (commission_method == 2) {
         commission_method = 0;
     }
@@ -2328,7 +2372,8 @@ void ui_update_device_state(uint64_t node_id) {
             const matter_device_t *d = device_manager_get(i);
             if (!d) continue;
             // Only count devices matching current interface mode
-            if (s_interface_mode == INTERFACE_MODE_WIFI &&
+            if ((s_interface_mode == INTERFACE_MODE_WIFI ||
+                 s_interface_mode == INTERFACE_MODE_ETHERNET) &&
                 d->is_thread) continue;
             if (s_interface_mode == INTERFACE_MODE_THREAD &&
                 !d->is_thread) continue;

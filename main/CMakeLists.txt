@@ -2,6 +2,7 @@ idf_component_register(
 	SRCS
 		"main.c"
 		"device_manager.c"
+		"ethernet.c"
 		"sdcard.c"
 		"ui_screens.c"
 		"camera_qr.c"
@@ -19,6 +20,7 @@ idf_component_register(
 		esp_lcd
 		esp_timer
 		driver
+		esp_eth
 		esp_psram
 		esp_driver_ppa
 		fatfs

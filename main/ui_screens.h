@@ -12,6 +12,7 @@ typedef enum {
     INTERFACE_MODE_NONE = 0,
     INTERFACE_MODE_WIFI,
     INTERFACE_MODE_THREAD,
+    INTERFACE_MODE_ETHERNET,
 } interface_mode_t;
 
 // Get the current interface mode selected by the user
