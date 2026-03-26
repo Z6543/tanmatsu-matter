@@ -564,7 +564,9 @@ static void reconnect_timer_cb(void *arg) {
         const matter_device_t *dev = device_manager_get(i);
         if (!dev || dev->reachable) continue;
         // Skip devices from the wrong interface
-        if (mode == INTERFACE_MODE_WIFI && dev->is_thread) continue;
+        if ((mode == INTERFACE_MODE_WIFI ||
+             mode == INTERFACE_MODE_ETHERNET) &&
+            dev->is_thread) continue;
         if (mode == INTERFACE_MODE_THREAD && !dev->is_thread) continue;
         ESP_LOGI(TAG, "Retrying subscribe for unreachable "
                  "node 0x%llx",
