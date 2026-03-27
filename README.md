@@ -11,6 +11,7 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://nico
   - QR Code payload (type manually or **scan with the built-in camera**)
   - BLE + WiFi (discover over BLE, provision WiFi credentials)
   - BLE + Thread (discover over BLE, provision Thread network credentials)
+- **Wired Ethernet** via W5500 SPI module on the J4 PMOD connector (no co-processor needed)
 - Thread Border Router using the ESP32-C6 IEEE 802.15.4 radio as an OpenThread RCP
 - Dashboard with device cards showing real-time state
 - Control devices by type: on/off, dimming, color temperature, hue/saturation, door locks, thermostats, window coverings, fans
@@ -25,6 +26,7 @@ A Matter commissioner/controller GUI application for the [Tanmatsu](https://nico
 - **Display**: DSI LCD panel via LVGL
 - **Camera**: OV5647 MIPI CSI (2-lane, 800×640 @ 50fps) — used for QR code scanning
 - **Input**: Keypad/encoder (navigated via LVGL input groups)
+- **Ethernet** (optional): W5500 SPI module on the J4 PMOD connector
 
 WiFi and BLE are provided by the ESP32-C6 co-processor over SDIO. The WiFi stack is managed by the tanmatsu wifi-manager component, not by the CHIP/Matter stack.
 
@@ -41,6 +43,7 @@ main/
   matter_commission.cpp/h   - Commissioning (PIN, QR, BLE+WiFi, BLE+Thread)
   camera_qr.c/h             - OV5647 camera init + quirc QR decode loop
   quirc/                    - Vendored quirc QR library (PSRAM-patched for ESP32)
+  ethernet.c/h              - W5500 SPI Ethernet driver (J4 PMOD, optional)
   matter_device_control.cpp/h - Device control (on/off/toggle, subscriptions)
   device_manager.c/h        - Device persistence (NVS storage)
   matter_project_config.h   - CHIP project configuration overrides
@@ -189,6 +192,8 @@ Notable sdkconfig settings in `sdkconfigs/tanmatsu`:
 | `CONFIG_OPENTHREAD_RADIO_SPINEL_UART` | `y` | Spinel over UART to C6 RCP |
 | `CONFIG_OPENTHREAD_FTD` | `y` | Full Thread Device (required for border router) |
 | `CONFIG_CAMERA_OV5647` | `y` | Enable OV5647 MIPI CSI camera driver |
+| `CONFIG_ETH_USE_SPI_ETHERNET` | `y` | Enable SPI Ethernet support |
+| `CONFIG_ETH_SPI_ETHERNET_W5500` | `y` | Enable W5500 SPI Ethernet driver |
 
 ## Device Attestation Certificates
 
@@ -213,6 +218,64 @@ make build && make flash
 ```
 
 `fetch_paa_certs.sh` downloads from both the DCL MainNet and TestNet and saves the DER files as `paa_cert/dcl_NNNN.der`. Previously downloaded DCL certs are replaced; the three SDK test certs (`Chip-Test-PAA-*.der`) are preserved.
+
+## Ethernet (W5500)
+
+The app supports wired Ethernet via a [W5500](https://www.wiznet.io/product-item/w5500/) SPI Ethernet module connected to the J4 PMOD header. This mode bypasses the WiFi co-processor entirely — useful when WiFi is unavailable or unreliable.
+
+### Wiring
+
+Connect a W5500 breakout to the J4 PMOD header (2×7, 2.54mm pitch):
+
+```
+J4 Pin  Signal       GPIO   W5500 pin
+──────  ──────────   ─────  ─────────
+  1     +3.3V         —     VCC / 3.3V
+  2     GND           —     GND
+  5     SAO_IO1      15     INT
+  6     SAO_IO2      34     RST
+  7     MTMS          4     SCS / CS
+  8     MTDO          5     MISO / SO
+  9     MTCK          2     SCLK / SCK
+ 10     MTDI          3     MOSI / SI
+ 11     GND           —     GND (optional, extra ground)
+ 14     +3.3V         —     VCC (optional, extra power)
+```
+
+Pin 1 is marked on the PCB. The header is oriented with pin 1 at the top when the Tanmatsu screen faces you.
+
+```
+    Top of connector (pin 1 side)
+    ┌─────────────────────────────┐
+    │  1 +3.3V  │  2 GND         │
+    │  3 SDA    │  4 SCL         │
+    │  5 INT    │  6 RST         │  ← W5500 INT / RST
+    │  7 CS     │  8 MISO        │  ← W5500 SPI
+    │  9 SCK    │ 10 MOSI        │  ← W5500 SPI
+    │ 11 GND    │ 12 GND         │
+    │ 13 GND    │ 14 +3.3V       │
+    └─────────────────────────────┘
+```
+
+> **Note**: GPIO 2–5 are JTAG pins (MTCK/MTDI/MTDO/MTMS) on the ESP32-P4. They are released from JTAG during Ethernet init via `gpio_reset_pin()`. If you need JTAG debugging, use WiFi or Thread mode instead.
+
+### Selecting Ethernet mode
+
+On the interface selection screen, choose **Ethernet**. The app will:
+1. Skip WiFi/BLE co-processor initialization entirely
+2. Initialize SPI2 and the W5500 driver
+3. Probe the W5500 version register — you should see `W5500 detected (version 0x04)` in the serial log
+4. Obtain an IP via DHCP and commission on-network Matter devices
+
+Only **on-network commissioning** (Setup Code / PIN) is available in Ethernet mode — BLE-based methods require the WiFi co-processor.
+
+### Troubleshooting
+
+If you see `MISO reads 0xFF` in the log:
+- Confirm the W5500 is powered (measure 3.3V on its VCC pin)
+- Check that pin 1 of the module lines up with pin 1 of the J4 header (orientation)
+- Verify MOSI and MISO are not swapped at the W5500 end (some modules label them SI/SO)
+- The SPI probe transaction is visible on a logic analyzer: CS goes low, SCK clocks 4 bytes; the 4th byte of the reply should be `0x04`
 
 ## Thread Commissioning
 
