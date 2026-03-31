@@ -3,7 +3,6 @@
 
 #include "bsp_lvgl.h"
 #include "bsp/display.h"
-#include "bsp/input.h"
 #include "core/lv_group.h"
 #include "display/lv_display.h"
 #include "esp_err.h"
@@ -65,9 +64,6 @@ static lv_area_t rotated_area;
 
 static esp_lcd_panel_handle_t panel_handle;
 
-static QueueHandle_t input_queue = NULL;
-static uint16_t s_nav_modifiers = 0;
-
 static lv_display_t* display = NULL;
 
 static SemaphoreHandle_t tearing_effect_semaphore = NULL;
@@ -79,10 +75,6 @@ void lvgl_lock() {
 
 void lvgl_unlock() {
     _lock_release(&lvgl_api_lock);
-}
-
-uint16_t lvgl_get_nav_modifiers(void) {
-    return s_nav_modifiers;
 }
 
 lv_display_t* lvgl_get_display(void) {
@@ -309,113 +301,9 @@ static void tearing_effect_flush_task(void* arg) {
     }
 }
 
-static void read_keyboard(lv_indev_t* indev, lv_indev_data_t* data) {
-    bsp_input_event_t event;
-
-    UBaseType_t messages_waiting = uxQueueMessagesWaiting(input_queue);
-
-    if (messages_waiting > 1) {
-        data->continue_reading = true;
-    }
-
-    if (messages_waiting >= 1) {
-        if (xQueueReceive(input_queue, &event, 0) == pdTRUE) {
-            switch (event.type) {
-                case INPUT_EVENT_TYPE_NAVIGATION:
-                    s_nav_modifiers = event.args_navigation.modifiers;
-                    switch (event.args_navigation.key) {
-                        case BSP_INPUT_NAVIGATION_KEY_UP:
-                            data->key   = LV_KEY_PREV;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_DOWN:
-                            data->key   = LV_KEY_NEXT;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_LEFT:
-                            data->key   = LV_KEY_LEFT;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_RIGHT:
-                            data->key   = LV_KEY_RIGHT;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_RETURN:
-                            data->key   = LV_KEY_ENTER;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_GAMEPAD_A:
-                            data->key   = LV_KEY_ENTER;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_ESC:
-                            data->key   = LV_KEY_ESC;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_GAMEPAD_B:
-                            data->key   = LV_KEY_ESC;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_TAB:
-                            if (event.args_navigation.modifiers & BSP_INPUT_MODIFIER_SHIFT) {
-                                data->key = LV_KEY_PREV;
-                            } else {
-                                data->key = LV_KEY_NEXT;
-                            }
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_BACKSPACE:
-                            data->key   = LV_KEY_BACKSPACE;
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_F1:
-                            data->key   = LV_KEY_HOME;  // F1 shortcut
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_F2:
-                            data->key   = LV_KEY_END;   // F2 shortcut
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_F3:
-                            data->key   = BSP_KEY_F3;  // screenshot
-                            data->state = event.args_navigation.state;
-                            break;
-                        case BSP_INPUT_NAVIGATION_KEY_SPACE_L:
-                        case BSP_INPUT_NAVIGATION_KEY_SPACE_M:
-                        case BSP_INPUT_NAVIGATION_KEY_SPACE_R:
-                        case BSP_INPUT_NAVIGATION_KEY_F4:
-                        case BSP_INPUT_NAVIGATION_KEY_F5:
-                        case BSP_INPUT_NAVIGATION_KEY_F6:
-                        case BSP_INPUT_NAVIGATION_KEY_VOLUME_UP:
-                        case BSP_INPUT_NAVIGATION_KEY_VOLUME_DOWN:
-                        case BSP_INPUT_NAVIGATION_KEY_SUPER:
-                            break;  // ignored, no warning
-                        default:
-                            ESP_LOGW(TAG, "Unhandled navigation event");
-                            break;
-                    }
-                    break;
-                case INPUT_EVENT_TYPE_KEYBOARD:
-                    data->state = LV_INDEV_STATE_PRESSED;
-                    data->key   = *((uint32_t*)event.args_keyboard.utf8);
-                    break;
-                case INPUT_EVENT_TYPE_ACTION:
-                    break;
-                case INPUT_EVENT_TYPE_SCANCODE:
-                    break;
-                default:
-                    ESP_LOGW(TAG, "Unhandled input event of type %u", event.type);
-                    break;
-            }
-        }
-    }
-}
-
 void lvgl_init(int32_t hres, int32_t vres, lcd_color_rgb_pixel_format_t colour_fmt,
-               esp_lcd_panel_handle_t lcd_panel_handle, esp_lcd_panel_io_handle_t lcd_panel_io_handle,
-               QueueHandle_t input_event_queue) {
+               esp_lcd_panel_handle_t lcd_panel_handle, esp_lcd_panel_io_handle_t lcd_panel_io_handle) {
     panel_handle = lcd_panel_handle;
-    input_queue  = input_event_queue;
 
     lv_init();
 
@@ -497,12 +385,4 @@ void lvgl_init(int32_t hres, int32_t vres, lcd_color_rgb_pixel_format_t colour_f
 
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, 2, NULL);
-
-    lv_indev_t* indev = lv_indev_create();
-    lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
-    lv_indev_set_read_cb(indev, read_keyboard);
-
-    lv_group_t* group = lv_group_create();
-    lv_indev_set_group(indev, group);
-    lv_group_set_default(group);
 }

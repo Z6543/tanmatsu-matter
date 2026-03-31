@@ -6,7 +6,6 @@
 #include "matter_init.h"
 
 #include "bsp_lvgl.h"
-#include "bsp/input.h"
 #include "sdcard.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -953,8 +952,7 @@ static void slider_key_cb(lv_event_t *e) {
     if (key != LV_KEY_LEFT && key != LV_KEY_RIGHT) return;
 
     lv_obj_t *slider = lv_event_get_target(e);
-    uint16_t mods = lvgl_get_nav_modifiers();
-    int32_t step = (mods & BSP_INPUT_MODIFIER_SHIFT) ? 1 : 10;
+    int32_t step = 10;
     int32_t val = lv_slider_get_value(slider);
     int32_t delta = (key == LV_KEY_RIGHT) ? step : -step;
     lv_slider_set_value(slider, val + delta, LV_ANIM_ON);
