@@ -495,7 +495,7 @@ static void event_timer_cb(lv_timer_t *timer) {
                     "Commissioning continues but device\n"
                     "may not be officially certified.");
                 lv_obj_set_style_text_color(commission_status_label,
-                    lv_color_hex(0xFFFFFF), 0);
+                    lv_color_hex(0x000000), 0);
             }
             break;
         case MATTER_EVENT_THREAD_BR_ERROR:
