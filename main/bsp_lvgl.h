@@ -16,9 +16,12 @@ void lvgl_unlock();
 /// @brief Get LVGL display pointer
 lv_display_t* lvgl_get_display(void);
 
-/// @brief Initialise LVGL
+/// @brief Initialise LVGL (display, buffers, tick timer — no task yet)
 void lvgl_init(int32_t hres, int32_t vres, lcd_color_rgb_pixel_format_t colour_fmt,
                esp_lcd_panel_handle_t lcd_panel_handle, esp_lcd_panel_io_handle_t lcd_panel_io_handle);
+
+/// @brief Start the LVGL task. Call after all indevs are registered.
+void lvgl_start_task(void);
 
 /// @brief Get the display's default rotation
 lv_display_rotation_t lvgl_get_default_rotation();
