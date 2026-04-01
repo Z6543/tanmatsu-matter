@@ -20,6 +20,7 @@
 #include <mdns.h>
 #include <openthread/dataset.h>
 #include <openthread/ip6.h>
+#include <openthread/srp_server.h>
 #include <openthread/thread.h>
 #include <platform/ESP32/OpenthreadLauncher.h>
 #endif
@@ -67,7 +68,8 @@ static void on_commissioning_failure(
 
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
 static bool s_thread_available = false;
-static bool s_thread_br_init = false;
+static bool s_thread_started = false;  // Thread + SRP running
+static bool s_thread_br_init = false;  // Full BR with backbone
 
 // Build an HDLC-encoded Spinel frame. Returns frame length.
 static int build_hdlc_frame(
@@ -195,6 +197,34 @@ static void on_rcp_reset_failure(void) {
         "Check that the C6 has ot_rcp firmware installed.");
 }
 
+// Start Thread network and SRP server without the full border
+// router. Allows commissioning Thread devices when WiFi is not
+// available. The commissioner discovers devices via OpenThread
+// DNS-SD (queries the local SRP server directly).
+static void init_thread_standalone() {
+    if (s_thread_started || s_thread_br_init) return;
+    ESP_LOGI(TAG, "Starting Thread + SRP server (no backbone)");
+
+    esp_openthread_lock_acquire(portMAX_DELAY);
+
+    otInstance *instance = esp_openthread_get_instance();
+    if (!otDatasetIsCommissioned(instance)) {
+        ESP_LOGI(TAG, "No active Thread dataset, creating from "
+                 "sdkconfig defaults");
+        esp_openthread_auto_start(NULL);
+    } else {
+        ESP_LOGI(TAG, "Thread dataset already commissioned");
+    }
+
+    otSrpServerSetEnabled(instance, true);
+    ESP_LOGI(TAG, "SRP server enabled");
+
+    esp_openthread_lock_release();
+    s_thread_started = true;
+}
+
+// Full border router with backbone routing and mDNS proxy.
+// Requires a backbone interface (WiFi/Ethernet) with an IP.
 static void init_thread_border_router() {
     if (s_thread_br_init) return;
     ESP_LOGI(TAG, "Initializing Thread border router");
@@ -225,6 +255,7 @@ static void init_thread_border_router() {
     }
 
     esp_openthread_lock_release();
+    s_thread_started = true;
     s_thread_br_init = true;
 }
 #endif
@@ -233,6 +264,13 @@ static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::PublicEventTypes::kInterfaceIpAddressChanged:
         ESP_LOGI(TAG, "Interface IP Address changed");
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+        // Upgrade standalone Thread+SRP to full border router
+        // now that the backbone interface has an IP.
+        if (s_thread_started && !s_thread_br_init) {
+            init_thread_border_router();
+        }
+#endif
         break;
     default:
         break;
@@ -374,26 +412,31 @@ esp_err_t matter_get_thread_active_dataset_hex(
 esp_err_t matter_start_thread_br(void) {
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
     if (!s_thread_available) return ESP_ERR_NOT_SUPPORTED;
-    if (s_thread_br_init) {
-        ESP_LOGI(TAG, "Thread border router already running");
+    if (s_thread_br_init || s_thread_started) {
+        ESP_LOGI(TAG, "Thread already running (br=%d)",
+                 s_thread_br_init);
         return ESP_OK;
     }
 
+    bool wifi_ready = false;
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
         "WIFI_STA_DEF");
-    if (!sta) {
-        ESP_LOGE(TAG, "WiFi STA netif not found");
-        return ESP_ERR_INVALID_STATE;
-    }
-    esp_netif_ip_info_t ip_info;
-    if (esp_netif_get_ip_info(sta, &ip_info) != ESP_OK ||
-        ip_info.ip.addr == 0) {
-        ESP_LOGE(TAG, "WiFi not connected, cannot start BR");
-        return ESP_ERR_INVALID_STATE;
+    if (sta) {
+        esp_netif_ip_info_t ip_info;
+        wifi_ready = (esp_netif_get_ip_info(sta, &ip_info)
+                      == ESP_OK && ip_info.ip.addr != 0);
     }
 
-    init_thread_border_router();
-    return s_thread_br_init ? ESP_OK : ESP_FAIL;
+    if (wifi_ready) {
+        init_thread_border_router();
+    } else {
+        ESP_LOGW(TAG, "WiFi not connected, starting Thread + "
+                 "SRP without backbone routing");
+        init_thread_standalone();
+    }
+
+    return (s_thread_br_init || s_thread_started)
+               ? ESP_OK : ESP_FAIL;
 #else
     return ESP_ERR_NOT_SUPPORTED;
 #endif
@@ -402,20 +445,29 @@ esp_err_t matter_start_thread_br(void) {
 esp_err_t matter_stop_thread_br(void) {
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
     if (!s_thread_available) return ESP_ERR_NOT_SUPPORTED;
-    if (!s_thread_br_init) {
-        ESP_LOGI(TAG, "Thread border router not running");
+    if (!s_thread_started && !s_thread_br_init) {
+        ESP_LOGI(TAG, "Thread not running");
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_LOGI(TAG, "Stopping Thread border router");
+    ESP_LOGI(TAG, "Stopping Thread");
 
     esp_openthread_lock_acquire(portMAX_DELAY);
 
     otInstance *instance = esp_openthread_get_instance();
+
+    if (!s_thread_br_init) {
+        otSrpServerSetEnabled(instance, false);
+    }
+
     otThreadSetEnabled(instance, false);
     otIp6SetEnabled(instance, false);
 
-    esp_err_t err = esp_openthread_border_router_deinit();
+    esp_err_t err = ESP_OK;
+    if (s_thread_br_init) {
+        err = esp_openthread_border_router_deinit();
+    }
+
     esp_openthread_lock_release();
 
     if (err != ESP_OK) {
@@ -423,8 +475,9 @@ esp_err_t matter_stop_thread_br(void) {
         return err;
     }
 
+    s_thread_started = false;
     s_thread_br_init = false;
-    ESP_LOGI(TAG, "Thread border router stopped");
+    ESP_LOGI(TAG, "Thread stopped");
     return ESP_OK;
 #else
     return ESP_ERR_NOT_SUPPORTED;

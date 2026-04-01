@@ -18,6 +18,7 @@
 #include <setup_payload/QRCodeSetupPayloadParser.h>
 #include <setup_payload/SetupPayload.h>
 #include <lib/support/ThreadOperationalDataset.h>
+#include <platform/PlatformManager.h>
 
 static const char *TAG = "matter_comm";
 
@@ -220,25 +221,30 @@ static void inject_attestation_delegate() {
 static esp_timer_handle_t s_timeout_timer = nullptr;
 static uint64_t s_timeout_node_id = 0;
 
-static void commission_timeout_cb(void *arg) {
-    uint64_t node_id = s_timeout_node_id;
+static void commission_timeout_work(intptr_t arg) {
+    uint64_t node_id = static_cast<uint64_t>(arg);
     ESP_LOGW(TAG, "Commission timeout (90s) for node 0x%llx",
              (unsigned long long)node_id);
 
-    {
-        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-        auto *comm = get_commissioner();
-        comm->StopPairing(node_id);
-        // StopPairing does not invoke the pairing delegate callback, so
-        // the delegate stays registered and blocks the next commission.
-        // Unregister it explicitly so check_idle_and_register() succeeds.
-        comm->RegisterPairingDelegate(nullptr);
-    }
+    auto *comm = get_commissioner();
+    comm->StopPairing(node_id);
+    // StopPairing does not invoke the pairing delegate callback, so
+    // the delegate stays registered and blocks the next commission.
+    // Unregister it explicitly so check_idle_and_register() succeeds.
+    comm->RegisterPairingDelegate(nullptr);
 
     matter_event_t ev = {};
     ev.type = MATTER_EVENT_COMMISSION_TIMEOUT;
     ev.node_id = node_id;
     matter_post_event(ev);
+}
+
+static void commission_timeout_cb(void *arg) {
+    // Schedule on the CHIP platform task which has a large stack.
+    // The esp_timer task stack is too small for StopPairing cleanup.
+    chip::DeviceLayer::PlatformMgr().ScheduleWork(
+        commission_timeout_work,
+        static_cast<intptr_t>(s_timeout_node_id));
 }
 
 static void start_commission_timeout(uint64_t node_id) {

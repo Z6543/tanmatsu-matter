@@ -503,7 +503,7 @@ static void event_timer_cb(lv_timer_t *timer) {
             if (dashboard_status_label) {
                 lv_label_set_text(dashboard_status_label, ev.msg);
                 lv_obj_set_style_text_color(dashboard_status_label,
-                    lv_color_hex(0xFFFFFF), 0);
+                    lv_color_hex(0x000000), 0);
             }
             break;
         case MATTER_EVENT_THREAD_BR_STARTED:
@@ -1498,7 +1498,7 @@ static void create_select_screen(void) {
     select_status_label = lv_label_create(select_status_row);
     lv_label_set_text(select_status_label, "");
     lv_obj_set_style_text_color(select_status_label,
-        lv_color_hex(0xFFFFFF), 0);
+        lv_color_hex(0x000000), 0);
 }
 
 static void create_dashboard_screen(void) {
