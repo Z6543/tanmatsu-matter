@@ -23,6 +23,16 @@
 #include "sdcard.h"
 #include "ui_screens.h"
 
+#include <mdns.h>
+
+#include "freertos/event_groups.h"
+
+// ESP-Hosted event declarations (from esp_hosted_event.h).
+// Declared locally to avoid adding esp-hosted-tanmatsu to
+// PRIV_REQUIRES (it's a transitive dependency via wifi_remote).
+ESP_EVENT_DECLARE_BASE(ESP_HOSTED_EVENT);
+#define ESP_HOSTED_EVENT_TRANSPORT_UP 3
+
 static char const TAG[] = "main";
 
 // esp-hosted-tanmatsu calls hosted_reset_slave_callback() to reset the C6 radio.
@@ -40,6 +50,16 @@ static lcd_rgb_data_endian_t        display_data_endian;
 static QueueHandle_t                input_event_queue = NULL;
 
 static interface_mode_t s_mode = INTERFACE_MODE_NONE;
+static EventGroupHandle_t s_hosted_events = NULL;
+#define HOSTED_TRANSPORT_UP_BIT BIT0
+
+static void on_hosted_transport_up(
+    void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)id; (void)data;
+    if (s_hosted_events) {
+        xEventGroupSetBits(s_hosted_events, HOSTED_TRANSPORT_UP_BIT);
+    }
+}
 
 static void start_thread_br_and_subscribe(void) {
     if (!matter_thread_available()) return;
@@ -93,10 +113,39 @@ static void on_wifi_got_ip(
     }
 }
 
+// Enable mDNS on the Ethernet netif. The mDNS stack registers
+// for IP events at mdns_init() time, but when Ethernet already has
+// an IP before mdns_init() runs (inside esp_matter::start), the
+// IP_EVENT_ETH_GOT_IP event is missed.  Calling mdns_netif_action
+// explicitly ensures the mDNS PCB is enabled on Ethernet so that
+// multicast DNS queries (used for on-network commissioning) work.
+static void enable_mdns_on_ethernet(void) {
+    esp_netif_t *eth = esp_netif_get_handle_from_ifkey("ETH_DEF");
+    if (!eth) return;
+
+    // Try enabling via predefined interface first.
+    // If the netif isn't known to mDNS (CONFIG_MDNS_PREDEF_NETIF_ETH
+    // not set or predefined lookup fails), register it manually.
+    esp_err_t err = mdns_netif_action(eth, MDNS_EVENT_ENABLE_IP4);
+    if (err == ESP_ERR_INVALID_STATE) {
+        err = mdns_register_netif(eth);
+        if (err == ESP_OK) {
+            err = mdns_netif_action(eth, MDNS_EVENT_ENABLE_IP4);
+        }
+    }
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "mDNS enabled on Ethernet (IPv4)");
+    } else {
+        ESP_LOGW(TAG, "mDNS ETH enable failed: %s",
+                 esp_err_to_name(err));
+    }
+}
+
 static void on_eth_got_ip(
     void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg; (void)base; (void)id; (void)data;
     ESP_LOGI(TAG, "Ethernet got IP, subscribing to devices");
+    enable_mdns_on_ethernet();
     matter_device_subscribe_wifi();
     if (device_manager_count() > 0) {
         matter_device_start_reconnect_timer();
@@ -129,6 +178,7 @@ void app_main(void) {
     lvgl_init(display_h_res, display_v_res, display_color_format,
               display_lcd_panel, display_lcd_panel_io);
     zh4ck_usb_keyboard_init(input_event_queue);
+    lvgl_start_task();
 
     // Mount SD card (optional, for screenshots)
     esp_err_t sd_res = sdcard_init();
@@ -156,10 +206,25 @@ void app_main(void) {
              s_mode == INTERFACE_MODE_THREAD ? "Thread" : "Ethernet");
 
     if (s_mode == INTERFACE_MODE_ETHERNET) {
-        // Ethernet-only: no WiFi co-processor, no Thread
+        // Ethernet-only: no WiFi connection, no Thread
         // Need netif and event loop (normally set up by WiFi stack)
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+        // Start ESP-Hosted co-processor even in Ethernet mode.
+        // The Matter stack requires BLE (NimBLE) for the
+        // DeviceControllerFactory init (CONFIG_ENABLE_CHIPOBLE=y).
+        // BLE runs on the C6 co-processor via ESP-Hosted SDIO.
+        // Register event handler before starting so we don't miss
+        // the transport-up event.
+        s_hosted_events = xEventGroupCreate();
+        esp_event_handler_register(
+            ESP_HOSTED_EVENT, ESP_HOSTED_EVENT_TRANSPORT_UP,
+            on_hosted_transport_up, NULL);
+        ESP_LOGI(TAG, "Initializing co-processor for BLE");
+        if (wifi_remote_initialize() != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to initialize co-processor");
+        }
 
         ESP_LOGI(TAG, "Initializing W5500 Ethernet");
         esp_err_t eth_res = ethernet_init();
@@ -171,6 +236,39 @@ void app_main(void) {
         if (!ethernet_connected()) {
             ESP_LOGW(TAG, "Ethernet not connected yet, "
                      "commissioning may not work until link is up");
+        }
+
+        // Wait for ESP-Hosted transport to come up. In WiFi mode
+        // this time is spent connecting to WiFi. The Matter
+        // controller factory requires NimBLE which needs the
+        // co-processor transport to be active.
+        ESP_LOGI(TAG, "Waiting for co-processor transport...");
+        EventBits_t bits = xEventGroupWaitBits(
+            s_hosted_events, HOSTED_TRANSPORT_UP_BIT,
+            pdFALSE, pdTRUE, pdMS_TO_TICKS(10000));
+        if (bits & HOSTED_TRANSPORT_UP_BIT) {
+            ESP_LOGI(TAG, "Co-processor transport ready");
+        } else {
+            ESP_LOGW(TAG, "Co-processor transport timeout, "
+                     "BLE commissioning may not work");
+        }
+
+        // Initialize the WiFi driver even in Ethernet mode. On
+        // ESP32-P4, esp_wifi_init() sends an RPC to the C6 to
+        // start its WiFi+BLE controller stacks via ESP-Hosted.
+        // Without this, NimBLE HCI transport to the BLE controller
+        // may not be ready when the Matter stack initializes.
+        // We immediately stop WiFi — only the BLE side is needed.
+        ESP_LOGI(TAG, "Initializing WiFi driver for BLE support");
+        wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
+        wifi_cfg.nvs_enable = false;
+        esp_err_t wifi_err = esp_wifi_init(&wifi_cfg);
+        if (wifi_err == ESP_OK) {
+            esp_wifi_stop();
+        } else {
+            ESP_LOGW(TAG, "WiFi driver init failed: %s "
+                     "(BLE commissioning may not work)",
+                     esp_err_to_name(wifi_err));
         }
     } else {
         // Initialize esp_hosted co-processor transport
@@ -205,6 +303,11 @@ void app_main(void) {
     matter_device_set_state_cb(on_device_state_changed);
 
     if (s_mode == INTERFACE_MODE_ETHERNET) {
+        // Ensure mDNS is active on the Ethernet interface now that
+        // the Matter stack (and mDNS) has been initialized. The
+        // Ethernet IP was likely obtained before mdns_init() ran,
+        // so the mDNS stack may have missed the IP event.
+        enable_mdns_on_ethernet();
         esp_event_handler_register(
             IP_EVENT, IP_EVENT_ETH_GOT_IP, on_eth_got_ip, NULL);
     } else {

@@ -93,23 +93,24 @@ static esp_err_t check_idle_and_register() {
     return ESP_OK;
 }
 
-// Check that WiFi has an IP address. On-network commissioning
+// Check that an IP interface is up. On-network commissioning
 // requires mDNS discovery which needs a working IP interface.
-static esp_err_t require_wifi_ip(void) {
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
-        "WIFI_STA_DEF");
-    if (!sta) {
-        ESP_LOGE(TAG, "WiFi STA netif not found");
-        return ESP_ERR_INVALID_STATE;
+// Accepts WiFi STA or Ethernet.
+static esp_err_t require_ip(void) {
+    const char *keys[] = {"WIFI_STA_DEF", "ETH_DEF"};
+    for (int i = 0; i < 2; i++) {
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey(
+            keys[i]);
+        if (!netif) continue;
+        esp_netif_ip_info_t ip;
+        if (esp_netif_get_ip_info(netif, &ip) == ESP_OK &&
+            ip.ip.addr != 0) {
+            return ESP_OK;
+        }
     }
-    esp_netif_ip_info_t ip;
-    if (esp_netif_get_ip_info(sta, &ip) != ESP_OK ||
-        ip.ip.addr == 0) {
-        ESP_LOGE(TAG, "WiFi STA has no IP address, cannot "
-                 "discover devices on the network");
-        return ESP_ERR_INVALID_STATE;
-    }
-    return ESP_OK;
+    ESP_LOGE(TAG, "No network interface with IP address, "
+             "cannot discover devices on the network");
+    return ESP_ERR_INVALID_STATE;
 }
 
 static int hex_char_to_nibble(char c) {
@@ -151,8 +152,10 @@ static int s_thread_dataset_len = 0;
 
 // Build CommissioningParameters with attestation delegate and
 // optionally WiFi/Thread credentials based on discovery hints.
+// Returns the (possibly adjusted) hints via out_hints.
 static esp_err_t build_params(
-    CommissioningParameters &params, uint8_t hints) {
+    CommissioningParameters &params, uint8_t *out_hints) {
+    uint8_t hints = *out_hints;
     params.SetDeviceAttestationDelegate(&s_attestation_delegate);
 
     if (hints_need_wifi_creds(hints)) {
@@ -161,15 +164,29 @@ static esp_err_t build_params(
         esp_err_t err =
             get_wifi_creds(ssid, sizeof(ssid), pwd, sizeof(pwd));
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to get WiFi credentials");
-            return err;
+            // WiFi not available (e.g. Ethernet mode). If
+            // on-network discovery is also enabled, drop BLE/SoftAP
+            // and continue with on-network only.
+            if (hints & DISC_HINT_ON_NET) {
+                ESP_LOGW(TAG, "WiFi creds unavailable, using "
+                         "on-network discovery only");
+                hints &= ~(DISC_HINT_BLE | DISC_HINT_SOFTAP);
+                *out_hints = hints;
+            } else {
+                ESP_LOGE(TAG, "Failed to get WiFi credentials");
+                return err;
+            }
+        } else {
+            chip::ByteSpan nameSpan(
+                reinterpret_cast<const uint8_t *>(ssid),
+                strlen(ssid));
+            chip::ByteSpan pwdSpan(
+                reinterpret_cast<const uint8_t *>(pwd),
+                strlen(pwd));
+            params.SetWiFiCredentials(
+                chip::Controller::WiFiCredentials(
+                    nameSpan, pwdSpan));
         }
-        chip::ByteSpan nameSpan(
-            reinterpret_cast<const uint8_t *>(ssid), strlen(ssid));
-        chip::ByteSpan pwdSpan(
-            reinterpret_cast<const uint8_t *>(pwd), strlen(pwd));
-        params.SetWiFiCredentials(
-            chip::Controller::WiFiCredentials(nameSpan, pwdSpan));
     }
 
     // When BLE discovery is enabled, also provide Thread
@@ -268,19 +285,26 @@ void matter_commission_cancel_timeout(void) {
 // --- mDNS diagnostics ---
 
 static void diag_mdns_browse(void) {
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey(
-        "WIFI_STA_DEF");
-    if (!sta) {
-        ESP_LOGW(TAG, "DIAG: WiFi STA netif not found");
+    esp_netif_ip_info_t ip = {};
+    bool found = false;
+    const char *iface = "?";
+    const char *keys[] = {"WIFI_STA_DEF", "ETH_DEF"};
+    const char *names[] = {"WiFi STA", "Ethernet"};
+    for (int i = 0; i < 2 && !found; i++) {
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey(
+            keys[i]);
+        if (!netif) continue;
+        if (esp_netif_get_ip_info(netif, &ip) == ESP_OK &&
+            ip.ip.addr != 0) {
+            found = true;
+            iface = names[i];
+        }
+    }
+    if (!found) {
+        ESP_LOGW(TAG, "DIAG: no network interface with IP");
         return;
     }
-    esp_netif_ip_info_t ip;
-    if (esp_netif_get_ip_info(sta, &ip) != ESP_OK ||
-        ip.ip.addr == 0) {
-        ESP_LOGW(TAG, "DIAG: WiFi STA has no IP address");
-        return;
-    }
-    ESP_LOGI(TAG, "DIAG: WiFi STA IP=" IPSTR, IP2STR(&ip.ip));
+    ESP_LOGI(TAG, "DIAG: %s IP=" IPSTR, iface, IP2STR(&ip.ip));
 
     // Synchronous mDNS browse for commissionable devices
     mdns_result_t *results = nullptr;
@@ -338,7 +362,7 @@ esp_err_t matter_commission_on_network(
     uint64_t node_id, uint32_t pincode) {
     ESP_LOGI(TAG, "Pairing on-network: node=0x%llx pin=%lu",
              (unsigned long long)node_id, (unsigned long)pincode);
-    ESP_RETURN_ON_ERROR(require_wifi_ip(), TAG, "No network");
+    ESP_RETURN_ON_ERROR(require_ip(), TAG, "No network");
     esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
     inject_attestation_delegate();
     esp_err_t err = esp_matter::controller::pairing_on_network(
@@ -360,7 +384,7 @@ esp_err_t matter_commission_disc_pass(
 
     if (discovery_hints & DISC_HINT_ON_NET) {
         ESP_RETURN_ON_ERROR(
-            require_wifi_ip(), TAG, "No network");
+            require_ip(), TAG, "No network");
     }
 
     chip::SetupPayload payload;
@@ -384,7 +408,7 @@ esp_err_t matter_commission_disc_pass(
 
     CommissioningParameters params;
     ESP_RETURN_ON_ERROR(
-        build_params(params, discovery_hints), TAG, "Params");
+        build_params(params, &discovery_hints), TAG, "Params");
     get_commissioner()->PairDevice(
         node_id, manual_code.c_str(), params,
         hints_to_discovery_type(discovery_hints));
@@ -420,15 +444,15 @@ esp_err_t matter_commission_setup_code(
         }
     }
 
-    // On-network discovery requires a working WiFi connection.
+    // On-network discovery requires a working IP interface.
     // When BLE is also available, degrade gracefully to BLE-only.
     if (hints & DISC_HINT_ON_NET) {
-        if (require_wifi_ip() != ESP_OK) {
+        if (require_ip() != ESP_OK) {
             if (hints & DISC_HINT_BLE) {
                 hints &= ~DISC_HINT_ON_NET;
-                ESP_LOGW(TAG, "No WiFi IP, using BLE-only discovery");
+                ESP_LOGW(TAG, "No IP, using BLE-only discovery");
             } else {
-                ESP_LOGE(TAG, "No WiFi IP for on-network discovery");
+                ESP_LOGE(TAG, "No IP for on-network discovery");
                 return ESP_ERR_INVALID_STATE;
             }
         }
@@ -442,7 +466,8 @@ esp_err_t matter_commission_setup_code(
     ESP_RETURN_ON_ERROR(check_idle_and_register(), TAG, "Busy");
 
     CommissioningParameters params;
-    ESP_RETURN_ON_ERROR(build_params(params, hints), TAG, "Params");
+    ESP_RETURN_ON_ERROR(
+        build_params(params, &hints), TAG, "Params");
     get_commissioner()->PairDevice(
         node_id, code, params, hints_to_discovery_type(hints));
     start_commission_timeout(node_id);

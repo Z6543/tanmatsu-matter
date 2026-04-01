@@ -383,6 +383,9 @@ void lvgl_init(int32_t hres, int32_t vres, lcd_color_rgb_pixel_format_t colour_f
     ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, LVGL_TICK_PERIOD_MS * 1000));
 
+}
+
+void lvgl_start_task(void) {
     ESP_LOGI(TAG, "Create LVGL task");
     xTaskCreate(lvgl_port_task, "LVGL", LVGL_TASK_STACK_SIZE, NULL, 2, NULL);
 }
